@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+css/output.css
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.vite/
+# 모델 파일
+*.pt
+*.pth
+

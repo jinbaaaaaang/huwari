@@ -1,0 +1,425 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import Layout from '../components/Layout'
+import CustomSelect from '../components/CustomSelect'
+
+interface HistoryItem {
+  id: string
+  beforeItems: Array<{
+    id: string
+    imageUrl: string
+    x: number
+    y: number
+    width: number
+    height: number
+    colors?: Array<{ rgb: number[]; hex: string; percentage: number }>
+    texture?: string
+    pattern?: string
+    style?: string
+  }>
+  harmonyScore: {
+    score_total: number
+    score_color: number
+    score_texture: number
+    score_pattern: number
+    score_style: number
+    reasons: string[]
+    debug: any
+  }
+  layoutImage?: string
+  createdAt: string
+}
+
+const History = () => {
+  const navigate = useNavigate()
+  const [sortBy, setSortBy] = useState('latest')
+  const [filterBy, setFilterBy] = useState('all')
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  const sortOptions = [
+    { value: 'latest', label: '최신순' },
+    { value: 'oldest', label: '오래된순' },
+    { value: 'score-high', label: '조화 점수\n높은순' },
+    { value: 'score-low', label: '조화 점수\n낮은순' },
+  ]
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      try {
+        setIsLoading(true)
+        const response = await fetch('/api/get-history')
+        const data = await response.json()
+        
+        if (data.success) {
+          setHistoryItems(data.history || [])
+        } else {
+          console.error('히스토리 불러오기 실패:', data.error)
+        }
+      } catch (error) {
+        console.error('히스토리 불러오기 오류:', error)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    fetchHistory()
+  }, [])
+
+  // 필터링된 히스토리 아이템
+  const filteredHistory = historyItems.filter((item) => {
+    if (filterBy === 'all') return true
+    
+    const itemDate = new Date(item.createdAt)
+    const now = new Date()
+    const diffTime = now.getTime() - itemDate.getTime()
+    const diffDays = diffTime / (1000 * 60 * 60 * 24)
+    
+    if (filterBy === 'week') return diffDays <= 7
+    if (filterBy === 'month') return diffDays <= 30
+    if (filterBy === '3months') return diffDays <= 90
+    
+    return true
+  })
+
+  // 정렬된 히스토리 아이템
+  const sortedHistory = [...filteredHistory].sort((a, b) => {
+    if (sortBy === 'latest') {
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    } else if (sortBy === 'oldest') {
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    } else if (sortBy === 'score-high') {
+      return b.harmonyScore.score_total - a.harmonyScore.score_total
+    } else if (sortBy === 'score-low') {
+      return a.harmonyScore.score_total - b.harmonyScore.score_total
+    }
+    return 0
+  })
+
+  // 날짜 포맷팅
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString)
+    return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`
+  }
+
+  // 색상 추출 (첫 번째 아이템의 상위 3개 색상)
+  const getTopColors = (item: HistoryItem) => {
+    if (item.beforeItems.length === 0) return []
+    const firstItem = item.beforeItems[0]
+    if (!firstItem.colors || firstItem.colors.length === 0) return []
+    return firstItem.colors.slice(0, 3)
+  }
+  
+  return (
+    <Layout>
+      <div className="grid grid-cols-12 bg-cream">
+
+        {/* 필터 및 정렬 */}
+            <div className="col-span-12 bg-cream p-6 pb-[23px] border-b border-secondary">
+          <div className="flex flex-col md:flex-row gap-4 items-center justify-between -mt-[-0.5px]">
+            <div className="flex gap-3 flex-wrap">
+                  <button 
+                    onClick={() => setFilterBy('all')}
+                    className={`px-3 py-1 border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider ${
+                      filterBy === 'all' ? 'bg-primary' : ''
+                    }`}
+                  >
+                전체
+              </button>
+                  <button 
+                    onClick={() => setFilterBy('week')}
+                    className={`px-3 py-1 border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider ${
+                      filterBy === 'week' ? 'bg-primary' : ''
+                    }`}
+                  >
+                최근 일주일
+              </button>
+                  <button 
+                    onClick={() => setFilterBy('month')}
+                    className={`px-3 py-1 border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider ${
+                      filterBy === 'month' ? 'bg-primary' : ''
+                    }`}
+                  >
+                최근 한 달
+              </button>
+                  <button 
+                    onClick={() => setFilterBy('3months')}
+                    className={`px-3 py-1 border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider ${
+                      filterBy === '3months' ? 'bg-primary' : ''
+                    }`}
+                  >
+                최근 3개월
+              </button>
+            </div>
+            <CustomSelect
+              options={sortOptions}
+              value={sortBy}
+              onChange={setSortBy}
+            />
+          </div>
+        </div>
+
+        {/* 히스토리 목록 */}
+        <div className="col-span-12 grid grid-cols-5 h-full">
+          {isLoading ? (
+            <>
+              {[...Array(10)].map((_, i) => (
+                <div key={i} className={`bg-cream border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
+                  <div className="relative mb-4">
+                    <div className="aspect-square bg-cream border border-secondary flex items-center justify-center">
+                      <div className="text-xs text-secondary">로딩 중...</div>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="h-6"></div>
+                    <div className="h-8"></div>
+                    <div className="pt-3 flex gap-2">
+                      <div className="flex-1 h-8"></div>
+                      <div className="flex-1 h-8"></div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
+          ) : sortedHistory.length === 0 ? (
+            <>
+              {[...Array(10)].map((_, i) => (
+                <div key={i} className={`bg-cream border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
+                  <div className="relative mb-4">
+                    <div className="aspect-square bg-cream border border-secondary flex items-center justify-center">
+                      
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="h-6"></div>
+                    <div className="h-8"></div>
+                    <div className="pt-3 flex gap-2">
+                      <div className="flex-1 h-8"></div>
+                      <div className="flex-1 h-8"></div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
+              {sortedHistory.map((item, index) => {
+                const topColors = getTopColors(item)
+                const score = Math.round(item.harmonyScore.score_total)
+                
+                // 전체 10칸 기준으로 border 계산
+                const gridIndex = index
+                const isLastInRow = gridIndex % 5 === 4
+                const totalRows = 2 // 항상 2행 (10칸 / 5열)
+                const currentRow = Math.floor(gridIndex / 5)
+                const isLastRow = currentRow === totalRows - 1
+                
+                return (
+                  <div
+                    key={item.id}
+                    className={`bg-cream border-secondary p-6 hover:bg-cream-dark transition-all cursor-pointer ${
+                      !isLastInRow ? 'border-r' : ''
+                    } ${!isLastRow ? 'border-b' : ''}`}
+                  >
+                  {/* 썸네일 이미지 영역 */}
+                  <div className="relative mb-4">
+                    <div className="aspect-square bg-cream border border-secondary flex items-center justify-center overflow-hidden">
+                      {item.layoutImage ? (
+                        <img 
+                          src={item.layoutImage} 
+                          alt="코디 레이아웃 미리보기" 
+                          className="w-full h-full object-contain bg-cream"
+                        />
+                      ) : item.beforeItems.length > 0 && item.beforeItems[0].imageUrl ? (
+                        <img 
+                          src={item.beforeItems[0].imageUrl} 
+                          alt="코디 미리보기" 
+                          className="w-full h-full object-contain bg-cream"
+                        />
+                      ) : (
+                        <div className="text-secondary text-xs">이미지 미리보기</div>
+                      )}
+                    </div>
+                    <div className="absolute top-2 right-2 bg-secondary text-cream px-3 py-1 text-xs border border-secondary rounded-full">
+                      조화 {score}점
+                    </div>
+                  </div>
+
+                  {/* 정보 */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-light text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">
+                        코디 분석 #{index + 1}
+                      </h3>
+                      <span className="text-xs text-secondary">{formatDate(item.createdAt)}</span>
+                    </div>
+                    
+                    {/* 분석 결과 요약 */}
+                    {topColors.length > 0 && (
+                      <div className="pt-2">
+                        <div className="bg-cream border border-secondary px-4 py-2 w-full">
+                          <div className="text-xs text-secondary mb-2 uppercase tracking-wider">색상</div>
+                          <div className="flex space-x-1">
+                            {topColors.map((color, colorIndex) => (
+                              <div
+                                key={colorIndex}
+                                className="w-3 h-3 rounded-full border border-secondary"
+                                style={{ backgroundColor: color.hex }}
+                              ></div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 버튼 영역 */}
+                    <div className="pt-3 flex gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          // localStorage에 히스토리 아이템 저장 후 Home으로 이동
+                          console.log('불러오기 클릭, 아이템:', item.beforeItems)
+                          localStorage.setItem('loadHistoryItems', JSON.stringify(item.beforeItems))
+                          console.log('localStorage 저장 완료')
+                          navigate('/')
+                        }}
+                        className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full hover:bg-primary transition-all"
+                      >
+                        불러오기
+                      </button>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation()
+                          if (window.confirm('정말 삭제하시겠습니까?')) {
+                            try {
+                              const response = await fetch(`/api/delete-history/${item.id}`, {
+                                method: 'DELETE',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                }
+                              })
+                              
+                              if (!response.ok) {
+                                const errorText = await response.text()
+                                throw new Error(`HTTP error! status: ${response.status}, ${errorText}`)
+                              }
+                              
+                              const data = await response.json()
+                              
+                              if (data.success) {
+                                // 히스토리 목록에서 제거
+                                setHistoryItems(prev => prev.filter(h => h.id !== item.id))
+                              } else {
+                                alert(`삭제 실패: ${data.error || '알 수 없는 오류'}`)
+                              }
+                            } catch (error) {
+                              console.error('삭제 오류:', error)
+                              alert(`삭제 중 오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`)
+                            }
+                          }
+                        }}
+                        className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full hover:bg-primary transition-all"
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                )
+              })}
+              {/* 빈 칸 채우기 - 항상 10칸 유지 */}
+              {sortedHistory.length < 10 && [...Array(10 - sortedHistory.length)].map((_, i) => {
+                const emptyIndex = sortedHistory.length + i
+                const isLastInRow = emptyIndex % 5 === 4
+                const totalRows = Math.ceil(10 / 5)
+                const currentRow = Math.floor(emptyIndex / 5)
+                const isLastRow = currentRow === totalRows - 1
+                
+                return (
+                  <div
+                    key={`empty-${i}`}
+                    className={`bg-cream border-secondary p-6 ${
+                      !isLastInRow ? 'border-r' : ''
+                    } ${!isLastRow ? 'border-b' : ''}`}
+                  >
+                    {/* 썸네일 이미지 영역 */}
+                    <div className="relative mb-4">
+                      <div className="aspect-square bg-cream flex items-center justify-center overflow-hidden">
+                      </div>
+                    </div>
+
+                    {/* 정보 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-light text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full opacity-0">
+                          코디 분석
+                        </div>
+                        <div className="text-xs text-secondary opacity-0">날짜</div>
+                      </div>
+                      
+                      {/* 분석 결과 요약 영역 */}
+                      <div className="pt-2">
+                        <div className="bg-cream px-4 py-2 w-full">
+                          <div className="text-xs text-secondary mb-2 uppercase tracking-wider opacity-0">색상</div>
+                          <div className="flex space-x-1">
+                            <div className="w-3 h-3"></div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 버튼 영역 */}
+                      <div className="pt-3 flex gap-2">
+                        <div className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full opacity-0">
+                          불러오기
+                        </div>
+                        <div className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full opacity-0">
+                          삭제
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </>
+          )}
+        </div>
+
+        {/* 빈 상태 (히스토리가 없을 때) */}
+        {/* 
+        <div className="text-center py-16">
+          <div className="text-6xl mb-4 opacity-50">📋</div>
+          <h3 className="text-xl font-semibold text-gray-700 mb-2">아직 분석 기록이 없습니다</h3>
+          <p className="text-gray-500 mb-6">패션 아이템 이미지를 업로드하여 첫 분석을 시작해보세요</p>
+          <button className="px-6 py-3 bg-gradient-to-r from-yellow-400 to-pink-400 text-white rounded-lg font-medium hover:from-yellow-500 hover:to-pink-500 transition-all">
+            분석 시작하기
+          </button>
+        </div>
+        */}
+
+        {/* 페이지네이션 */}
+            <div className="col-span-12 border-t border-secondary flex justify-center p-6">
+          <div className="flex items-center gap-1">
+                <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
+              이전
+            </button>
+                <button className="w-10 h-10 bg-secondary text-cream border border-secondary hover:bg-secondary-dark transition-all text-xs rounded-full flex items-center justify-center">
+              1
+            </button>
+                <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
+              2
+            </button>
+                <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
+              3
+            </button>
+                <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
+              다음
+            </button>
+          </div>
+        </div>
+    </div>
+    </Layout>
+  )
+}
+
+export default History
+
