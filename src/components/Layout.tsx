@@ -75,7 +75,7 @@ const Layout = ({ children }: LayoutProps) => {
             </nav>
 
             {/* Footer in Sidebar */}
-            <div className="row-span-1 pt-8 pb-8 border-t border-secondary w-full flex justify-center">
+            <div className="row-span-1 h-24 border-t border-secondary w-full flex items-center justify-center">
               <Footer />
             </div>
           </div>

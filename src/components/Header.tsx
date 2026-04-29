@@ -32,7 +32,7 @@ const Header = () => {
   }
 
   return (
-    <header className="w-full p-6 border-b border-secondary flex items-center box-border -mt-[2px]">
+    <header className="w-full p-6 border-b border-secondary flex items-center box-border">
       <div className="flex items-center justify-center gap-4 w-full box-border">
             <div className="relative flex items-center">
               <img 

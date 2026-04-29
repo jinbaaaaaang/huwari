@@ -28,6 +28,7 @@ interface HarmonyScore {
 
 function Home() {
   const location = useLocation()
+  const [inputMode, setInputMode] = useState<'upload' | 'webcam'>('upload')
   const [beforeItems, setBeforeItems] = useState<PlacedItem[]>([])
   const [afterItems] = useState<PlacedItem[]>([])
   const [harmonyScore, setHarmonyScore] = useState<HarmonyScore | null>(null)
@@ -236,27 +237,68 @@ function Home() {
         <div className="grid grid-cols-2 flex-1 min-h-0">
           {/* 왼쪽: 기존 패션 아이템 */}
           <div className="bg-cream border-r border-secondary flex flex-col">
-            <div className="p-6 flex items-center justify-between border-b border-secondary">
-              <h3 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">코디 업로드</h3>
+            <div className="p-6 flex items-center justify-between border-b border-secondary translate-y-[1.375px]">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setInputMode('upload')}
+                  className={`text-xs font-regular uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full transition-all ${
+                    inputMode === 'upload' ? 'bg-secondary text-cream' : 'text-secondary'
+                  }`}
+                >
+                  코디 업로드
+                </button>
+                <button
+                  onClick={() => setInputMode('webcam')}
+                  className={`text-xs font-regular uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full transition-all ${
+                    inputMode === 'webcam' ? 'bg-secondary text-cream' : 'text-secondary'
+                  }`}
+                >
+                  웹캠
+                </button>
+              </div>
             </div>
             
-            {/* 이미지 업로드 및 아이템 배치 영역 - flex-1 영역 */}
+            {/* 코디 업로드 / 웹캠 전환 영역 */}
             <div className="flex-1 flex flex-col min-h-0">
               <div className="flex-1 min-h-0">
-                <ItemPlacementArea
-                  key={beforeItems.length > 0 ? `items-${beforeItems.map(i => i.id).join('-')}` : 'empty'}
-                  buttonText="이미지 업로드"
-                  buttonIcon="upload"
-                  instructionText="이미지를 업로드하면<br />자동으로 배치됩니다"
-                  containerId="item-container-before"
-                  onItemsChange={setBeforeItems}
-                  onReset={() => {
-                    setBeforeItems([])
-                    localStorage.removeItem('currentItems')
-                  }}
-                  harmonyScore={harmonyScore}
-                  initialItems={beforeItems}
-                />
+                {inputMode === 'upload' ? (
+                  <ItemPlacementArea
+                    key={beforeItems.length > 0 ? `items-${beforeItems.map(i => i.id).join('-')}` : 'empty'}
+                    buttonText="이미지 업로드"
+                    buttonIcon="upload"
+                    instructionText="이미지를 업로드하면<br />자동으로 배치됩니다"
+                    containerId="item-container-before"
+                    onItemsChange={setBeforeItems}
+                    onReset={() => {
+                      setBeforeItems([])
+                      localStorage.removeItem('currentItems')
+                    }}
+                    harmonyScore={harmonyScore}
+                    initialItems={beforeItems}
+                  />
+                ) : (
+                  <div className="h-full p-6 flex flex-col">
+                    <div className="flex-1 border border-secondary rounded-2xl flex flex-col items-center justify-center gap-4">
+                      <div className="w-16 h-16 rounded-full border border-secondary flex items-center justify-center">
+                        <svg className="w-7 h-7 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5a2.5 2.5 0 012.5-2.5h7a2.5 2.5 0 012.5 2.5v1.2l3.4-2.3A1 1 0 0120 7.2v9.6a1 1 0 01-1.6.8L15 15.3v1.2a2.5 2.5 0 01-2.5 2.5h-7A2.5 2.5 0 013 16.5v-9z" />
+                        </svg>
+                      </div>
+                      <p className="text-xs text-secondary text-center leading-relaxed">
+                        웹캠 모드 준비 중입니다.<br />
+                        카메라 연결 후 이 영역에 실시간 화면이 표시됩니다.
+                      </p>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <button className="px-4 py-2 border border-secondary rounded-full text-xs text-secondary uppercase tracking-wider hover:bg-primary transition-all">
+                        카메라 켜기
+                      </button>
+                      <button className="px-4 py-2 border border-secondary rounded-full text-xs text-secondary uppercase tracking-wider hover:bg-primary transition-all">
+                        캡처
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -350,7 +392,7 @@ function Home() {
 
           {/* 오른쪽: 조화 분석 결과 */}
           <div className="bg-cream flex flex-col">
-            <div className="p-6 flex items-center justify-between border-b border-secondary">
+            <div className="p-6 flex items-center justify-between border-b border-secondary translate-y-[1.375px]">
               <h3 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">코디 평가</h3>
             </div>
             

@@ -95,6 +95,7 @@ const History = () => {
     }
     return 0
   })
+  const visibleHistory = sortedHistory.slice(0, 10)
 
   // 날짜 포맷팅
   const formatDate = (dateString: string) => {
@@ -112,11 +113,11 @@ const History = () => {
   
   return (
     <Layout>
-      <div className="grid grid-cols-12 bg-cream">
+      <div className="h-screen flex flex-col bg-cream">
 
         {/* 필터 및 정렬 */}
-            <div className="col-span-12 bg-cream p-6 pb-[23px] border-b border-secondary">
-          <div className="flex flex-col md:flex-row gap-4 items-center justify-between -mt-[-0.5px]">
+        <div className="bg-cream p-6 border-b border-secondary flex items-center translate-y-[1.375px]">
+          <div className="w-full flex flex-col md:flex-row gap-4 items-center justify-between">
             <div className="flex gap-3 flex-wrap">
                   <button 
                     onClick={() => setFilterBy('all')}
@@ -160,7 +161,7 @@ const History = () => {
         </div>
 
         {/* 히스토리 목록 */}
-        <div className="col-span-12 grid grid-cols-5 h-full">
+        <div className="grid grid-cols-5 grid-rows-2 flex-1 min-h-0 overflow-hidden">
           {isLoading ? (
             <>
               {[...Array(10)].map((_, i) => (
@@ -181,7 +182,7 @@ const History = () => {
                 </div>
               ))}
             </>
-          ) : sortedHistory.length === 0 ? (
+          ) : visibleHistory.length === 0 ? (
             <>
               {[...Array(10)].map((_, i) => (
                 <div key={i} className={`bg-cream border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
@@ -203,23 +204,16 @@ const History = () => {
             </>
           ) : (
             <>
-              {sortedHistory.map((item, index) => {
+              {visibleHistory.map((item, index) => {
                 const topColors = getTopColors(item)
                 const score = Math.round(item.harmonyScore.score_total)
-                
-                // 전체 10칸 기준으로 border 계산
-                const gridIndex = index
-                const isLastInRow = gridIndex % 5 === 4
-                const totalRows = 2 // 항상 2행 (10칸 / 5열)
-                const currentRow = Math.floor(gridIndex / 5)
-                const isLastRow = currentRow === totalRows - 1
                 
                 return (
                   <div
                     key={item.id}
                     className={`bg-cream border-secondary p-6 hover:bg-cream-dark transition-all cursor-pointer ${
-                      !isLastInRow ? 'border-r' : ''
-                    } ${!isLastRow ? 'border-b' : ''}`}
+                      index % 5 !== 4 ? 'border-r' : ''
+                    } ${index < 5 ? 'border-b' : ''}`}
                   >
                   {/* 썸네일 이미지 영역 */}
                   <div className="relative mb-4">
@@ -327,28 +321,18 @@ const History = () => {
                 </div>
                 )
               })}
-              {/* 빈 칸 채우기 - 항상 10칸 유지 */}
-              {sortedHistory.length < 10 && [...Array(10 - sortedHistory.length)].map((_, i) => {
-                const emptyIndex = sortedHistory.length + i
-                const isLastInRow = emptyIndex % 5 === 4
-                const totalRows = Math.ceil(10 / 5)
-                const currentRow = Math.floor(emptyIndex / 5)
-                const isLastRow = currentRow === totalRows - 1
-                
+              {visibleHistory.length < 10 && [...Array(10 - visibleHistory.length)].map((_, i) => {
+                const emptyIndex = visibleHistory.length + i
                 return (
                   <div
                     key={`empty-${i}`}
                     className={`bg-cream border-secondary p-6 ${
-                      !isLastInRow ? 'border-r' : ''
-                    } ${!isLastRow ? 'border-b' : ''}`}
+                      emptyIndex % 5 !== 4 ? 'border-r' : ''
+                    } ${emptyIndex < 5 ? 'border-b' : ''}`}
                   >
-                    {/* 썸네일 이미지 영역 */}
                     <div className="relative mb-4">
-                      <div className="aspect-square bg-cream flex items-center justify-center overflow-hidden">
-                      </div>
+                      <div className="aspect-square bg-cream flex items-center justify-center overflow-hidden" />
                     </div>
-
-                    {/* 정보 */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <div className="text-xs font-light text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full opacity-0">
@@ -356,18 +340,14 @@ const History = () => {
                         </div>
                         <div className="text-xs text-secondary opacity-0">날짜</div>
                       </div>
-                      
-                      {/* 분석 결과 요약 영역 */}
                       <div className="pt-2">
                         <div className="bg-cream px-4 py-2 w-full">
                           <div className="text-xs text-secondary mb-2 uppercase tracking-wider opacity-0">색상</div>
                           <div className="flex space-x-1">
-                            <div className="w-3 h-3"></div>
+                            <div className="w-3 h-3" />
                           </div>
                         </div>
                       </div>
-
-                      {/* 버튼 영역 */}
                       <div className="pt-3 flex gap-2">
                         <div className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full opacity-0">
                           불러오기
@@ -397,7 +377,7 @@ const History = () => {
         */}
 
         {/* 페이지네이션 */}
-            <div className="col-span-12 border-t border-secondary flex justify-center p-6">
+        <div className="h-24 border-t border-secondary flex items-center justify-center">
           <div className="flex items-center gap-1">
                 <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
               이전
@@ -416,7 +396,7 @@ const History = () => {
             </button>
           </div>
         </div>
-    </div>
+      </div>
     </Layout>
   )
 }

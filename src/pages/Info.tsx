@@ -5,7 +5,7 @@ const Info = () => {
     <Layout>
       <div className="grid grid-cols-12">
          {/* 헤더 */}
-        <div className="col-span-12 p-6 flex items-center justify-between border-b border-secondary">
+        <div className="col-span-12 p-6 flex items-center justify-between border-b border-secondary translate-y-[1.375px]">
           <h3 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">HUWARI란?</h3>
         </div>
         {/* 이름의 의미 */}
