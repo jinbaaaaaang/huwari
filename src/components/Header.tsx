@@ -59,7 +59,7 @@ const Header = () => {
             </div>
         <Link to="/" className="flex items-center">
           <h1 className="text-lg font-regular text-secondary uppercase tracking-wider">
-              Codimodi
+              HUWARI
             </h1>
           </Link>
         <div className="relative flex items-center">

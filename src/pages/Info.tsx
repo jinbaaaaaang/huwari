@@ -6,7 +6,7 @@ const Info = () => {
       <div className="grid grid-cols-12">
          {/* 헤더 */}
         <div className="col-span-12 p-6 flex items-center justify-between border-b border-secondary">
-          <h3 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">Codimodi란?</h3>
+          <h3 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">HUWARI란?</h3>
         </div>
         {/* 이름의 의미 */}
             <div className="col-span-12 border-b border-secondary">
@@ -14,38 +14,38 @@ const Info = () => {
             <div className="text-center mb-8">
               <div className="inline-block mb-4">
                     <h3 className="text-2xl font-light text-secondary inline-block px-4 py-2 border border-secondary rounded-full">
-                  Codimodi
+                  HUWARI
                 </h3>
               </div>
                   <p className="text-sm text-secondary">
-                    <span className="font-medium text-secondary">Coordination</span> + <span className="font-medium text-secondary">Modi</span>
+                    일본어 표현 <span className="font-medium text-secondary">ふわり (fuwari)</span>에서 착안한 이름
               </p>
             </div>
 
                 <div className="grid grid-cols-2 mb-8">
                   <div className="border-r border-secondary p-6 text-center">
                 <div className="flex flex-col items-center gap-2 mb-3">
-                      <h4 className="text-lg font-light text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">Coordination</h4>
+                      <h4 className="text-lg font-light text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">Fuwari</h4>
                 </div>
                     <p className="text-xs text-secondary leading-relaxed">
-                      "조화", "협조"를 의미하며, <br />패션 아이템들 간의 <span className="font-medium text-secondary">조화로운 조합</span>을 추구합니다.
+                      "가볍게 떠오르다, 부드럽게 스치다"라는 <br />느낌처럼 코디를 <span className="font-medium text-secondary">부담 없이 살펴보는 태도</span>를 담았습니다.
                 </p>
               </div>
 
                   <div className="p-6 text-center">
                 <div className="flex flex-col items-center gap-2 mb-3">
-                      <h4 className="text-lg font-light text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">Modi</h4>
+                      <h4 className="text-lg font-light text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">Huwari</h4>
                 </div>
                     <p className="text-xs text-secondary leading-relaxed">
-                      "방식", "스타일"을 의미하는 라틴어로,<br />각자의 <span className="font-medium text-secondary">개성 있는 패션 스타일</span>을 표현할 수 있도록 돕습니다.
+                      사용자의 코디를 딱딱하게 평가하기보다,<br /><span className="font-medium text-secondary">어울림을 편안하게 제안하는 패션 도우미</span>를 지향합니다.
                 </p>
               </div>
             </div>
 
             <div className="text-center">
                   <p className="text-sm text-secondary leading-relaxed">
-                    Codimodi는 <span className="font-medium text-secondary">"조화로운 패션 스타일링"</span>을 통해<br />
-                사용자들이 자신만의 개성 있는 룩을 완성할 수 있도록 돕는 서비스입니다.
+                    HUWARI는 옷의 <span className="font-medium text-secondary">색감, 분위기, 계절감, 조화로움</span>을<br />
+                가볍고 자연스럽게 살펴보고, 더 편안한 코디 선택을 돕는 서비스입니다.
               </p>
             </div>
           </div>
@@ -61,13 +61,13 @@ const Info = () => {
                 특히 새로운 아이템을 구매할 때 기존 옷장의 아이템들과 조화를 이루는지 확인하기 어려워합니다.
               </p>
                   <p className="text-xs text-secondary leading-relaxed">
-                Codimodi는 이러한 고민을 해결하기 위해 만들어졌습니다.<br />
+                HUWARI는 이러한 고민을 해결하기 위해 만들어졌습니다.<br />
                     <span className="font-medium text-secondary">AI 기술을 활용</span>하여 패션 아이템의 특성을 분석하고, 
                 새로운 아이템 추가 시 전체적인 조화를 예측하여 사용자가 더 자신감 있게 스타일링할 수 있도록 돕습니다.
               </p>
                   <p className="text-xs text-secondary leading-relaxed">
                     누구나 쉽게 <span className="font-medium text-secondary">조화로운 패션 스타일링</span>을 할 수 있도록, 
-                복잡한 패션 원리를 간단하고 직관적인 방식으로 제공하는 것이 Codimodi의 목표입니다.
+                복잡한 패션 원리를 간단하고 직관적인 방식으로 제공하는 것이 HUWARI의 목표입니다.
               </p>
             </div>
           </div>
@@ -184,7 +184,7 @@ const Info = () => {
               <h3 className="text-xs font-regular text-secondary uppercase tracking-wider p-8 pb-0"><span className="inline-block px-3 py-1 border border-secondary rounded-full">조화 상태 표시</span></h3>
               <div className="p-8 pt-5">
                 <p className="text-xs text-secondary leading-relaxed mb-6 text-left">
-              Codimodi는 조화 점수에 따라 기니피그의 표정이 달라집니다
+              HUWARI는 조화 점수에 따라 기니피그의 표정이 달라집니다
             </p>
                 <div className="grid grid-cols-3">
                   <div className="border-r border-secondary p-6 text-center">

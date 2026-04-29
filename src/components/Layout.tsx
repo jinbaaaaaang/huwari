@@ -24,8 +24,8 @@ const Layout = ({ children }: LayoutProps) => {
             {/* Brand Description */}
             <div className="row-span-1 px-4 pt-8 pb-8 text-center">
               <p className="text-xs text-secondary leading-relaxed">
-                당신의 코디, 얼마나 잘 어울릴까요?<br />
-                기니가 코디를 분석해드려요
+                HUWARI가 색감, 분위기, 조화로움을<br />
+                가볍고 자연스럽게 살펴봐요
               </p>
             </div>
 

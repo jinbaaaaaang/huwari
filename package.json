@@ -1,5 +1,5 @@
 {
-  "name": "codimodi",
+  "name": "huwari",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -12,16 +12,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jinbaaaaaang/codimodi.git"
+    "url": "git+https://github.com/jinbaaaaaang/huwari.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/jinbaaaaaang/codimodi/issues"
+    "url": "https://github.com/jinbaaaaaang/huwari/issues"
   },
-  "homepage": "https://github.com/jinbaaaaaang/codimodi#readme",
+  "homepage": "https://github.com/jinbaaaaaang/huwari#readme",
   "dependencies": {
     "express": "^5.2.1",
     "react": "^19.2.3",

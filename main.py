@@ -47,7 +47,7 @@ except ImportError:
     CLIPProcessor = None
     CLIPModel = None
 
-app = FastAPI(title="Codimodi API")
+app = FastAPI(title="HUWARI API")
 
 # ===== Harmony Ranker CKPT 경로 (MH-Attn set ranker) =====
 HARMONY_CKPT = Path(__file__).resolve().parent / "models" / "ranker_set_mhattn_enb0.pt"
