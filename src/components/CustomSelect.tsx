@@ -36,7 +36,7 @@ const CustomSelect = ({ options, value, onChange, placeholder = '선택하세요
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="relative px-3 py-1 pr-8 bg-cream border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider appearance-none cursor-pointer whitespace-nowrap"
+        className="relative px-3 py-1 pr-8 bg-[#FAFAF8] border border-secondary rounded-full text-secondary hover:bg-secondary hover:text-cream transition-all text-xs font-regular uppercase tracking-wider appearance-none cursor-pointer whitespace-nowrap"
       >
         <span className="pr-6">{selectedOption ? selectedOption.label : placeholder}</span>
         <svg
@@ -50,7 +50,7 @@ const CustomSelect = ({ options, value, onChange, placeholder = '선택하세요
       </button>
 
       {isOpen && (
-        <div className="absolute w-full mt-2 bg-cream border border-secondary rounded-lg overflow-hidden" style={{ zIndex: 1001 }}>
+        <div className="absolute w-full mt-2 bg-[#FAFAF8] border border-secondary rounded-lg overflow-hidden" style={{ zIndex: 1001 }}>
           {options.map((option, index) => (
             <button
               key={option.value}
@@ -59,14 +59,14 @@ const CustomSelect = ({ options, value, onChange, placeholder = '선택하세요
                 onChange(option.value)
                 setIsOpen(false)
               }}
-              className={`w-full px-4 py-2 text-left text-secondary hover:bg-primary transition-colors text-xs font-light uppercase tracking-wider ${
-                value === option.value ? 'bg-primary font-medium' : ''
+              className={`w-full px-4 py-2 text-left hover:bg-secondary hover:text-cream transition-colors text-xs font-light uppercase tracking-wider ${
+                value === option.value ? 'bg-secondary text-cream font-medium' : 'text-secondary'
               } ${index === 0 ? 'pt-3' : ''} ${index === options.length - 1 ? 'pb-3' : ''}`}
             >
               <div className="flex items-center justify-between">
                 <span className="whitespace-pre-line leading-tight">{option.label}</span>
                 {value === option.value && (
-                  <svg className="w-4 h-4 text-secondary flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
                   </svg>
                 )}

@@ -46,7 +46,7 @@ const ImageUpload = ({ onImageUpload, uploadedImage }: ImageUploadProps) => {
   }
 
   return (
-    <div className="bg-cream rounded-2xl shadow-xl p-6 border border-secondary">
+    <div className="bg-[#FAFAF8] rounded-2xl shadow-xl p-6 border border-secondary">
       <h3 className="text-xl font-semibold text-secondary mb-4">패션 아이템 이미지 업로드</h3>
       
       {!uploadedImage ? (
@@ -85,7 +85,7 @@ const ImageUpload = ({ onImageUpload, uploadedImage }: ImageUploadProps) => {
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="mt-4 px-6 py-2 bg-secondary text-white rounded-lg hover:bg-secondary-dark transition-colors"
+              className="mt-4 px-6 py-2 bg-[#FAFAF8] border border-secondary text-secondary rounded-lg hover:bg-secondary hover:text-cream transition-colors"
             >
               파일 선택
             </button>

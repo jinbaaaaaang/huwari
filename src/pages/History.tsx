@@ -113,40 +113,40 @@ const History = () => {
   
   return (
     <Layout>
-      <div className="h-screen flex flex-col bg-cream">
+      <div className="h-screen flex flex-col bg-[#FAFAF8]">
 
         {/* 필터 및 정렬 */}
-        <div className="bg-cream p-6 border-b border-secondary flex items-center translate-y-[1.375px]">
+        <div className="relative z-30 overflow-visible bg-[#FAFAF8] p-6 border-b border-secondary flex items-center translate-y-[1.375px]">
           <div className="w-full flex flex-col md:flex-row gap-4 items-center justify-between">
             <div className="flex gap-3 flex-wrap">
                   <button 
                     onClick={() => setFilterBy('all')}
-                    className={`px-3 py-1 border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider ${
-                      filterBy === 'all' ? 'bg-primary' : ''
+                    className={`px-3 py-1 border border-secondary rounded-full hover:bg-secondary hover:text-cream transition-all text-xs font-regular uppercase tracking-wider ${
+                      filterBy === 'all' ? 'bg-secondary text-cream' : 'text-secondary'
                     }`}
                   >
                 전체
               </button>
                   <button 
                     onClick={() => setFilterBy('week')}
-                    className={`px-3 py-1 border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider ${
-                      filterBy === 'week' ? 'bg-primary' : ''
+                    className={`px-3 py-1 border border-secondary rounded-full hover:bg-secondary hover:text-cream transition-all text-xs font-regular uppercase tracking-wider ${
+                      filterBy === 'week' ? 'bg-secondary text-cream' : 'text-secondary'
                     }`}
                   >
                 최근 일주일
               </button>
                   <button 
                     onClick={() => setFilterBy('month')}
-                    className={`px-3 py-1 border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider ${
-                      filterBy === 'month' ? 'bg-primary' : ''
+                    className={`px-3 py-1 border border-secondary rounded-full hover:bg-secondary hover:text-cream transition-all text-xs font-regular uppercase tracking-wider ${
+                      filterBy === 'month' ? 'bg-secondary text-cream' : 'text-secondary'
                     }`}
                   >
                 최근 한 달
               </button>
                   <button 
                     onClick={() => setFilterBy('3months')}
-                    className={`px-3 py-1 border border-secondary rounded-full text-secondary hover:bg-primary transition-all text-xs font-regular uppercase tracking-wider ${
-                      filterBy === '3months' ? 'bg-primary' : ''
+                    className={`px-3 py-1 border border-secondary rounded-full hover:bg-secondary hover:text-cream transition-all text-xs font-regular uppercase tracking-wider ${
+                      filterBy === '3months' ? 'bg-secondary text-cream' : 'text-secondary'
                     }`}
                   >
                 최근 3개월
@@ -161,13 +161,13 @@ const History = () => {
         </div>
 
         {/* 히스토리 목록 */}
-        <div className="grid grid-cols-5 grid-rows-2 flex-1 min-h-0 overflow-hidden">
+        <div className="relative z-0 grid grid-cols-5 grid-rows-2 flex-1 min-h-0 overflow-hidden">
           {isLoading ? (
             <>
               {[...Array(10)].map((_, i) => (
-                <div key={i} className={`bg-cream border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
+                <div key={i} className={`bg-[#FAFAF8] border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
                   <div className="relative mb-4">
-                    <div className="aspect-square bg-cream border border-secondary flex items-center justify-center">
+                    <div className="aspect-square bg-[#FAFAF8] border border-secondary flex items-center justify-center">
                       <div className="text-xs text-secondary">로딩 중...</div>
                     </div>
                   </div>
@@ -185,9 +185,9 @@ const History = () => {
           ) : visibleHistory.length === 0 ? (
             <>
               {[...Array(10)].map((_, i) => (
-                <div key={i} className={`bg-cream border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
+                <div key={i} className={`bg-[#FAFAF8] border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
                   <div className="relative mb-4">
-                    <div className="aspect-square bg-cream border border-secondary flex items-center justify-center">
+                    <div className="aspect-square bg-[#FAFAF8] border border-secondary flex items-center justify-center">
                       
                     </div>
                   </div>
@@ -211,24 +211,24 @@ const History = () => {
                 return (
                   <div
                     key={item.id}
-                    className={`bg-cream border-secondary p-6 hover:bg-cream-dark transition-all cursor-pointer ${
+                    className={`bg-[#FAFAF8] border-secondary p-6 hover:bg-[#FAFAF8] transition-all cursor-pointer ${
                       index % 5 !== 4 ? 'border-r' : ''
                     } ${index < 5 ? 'border-b' : ''}`}
                   >
                   {/* 썸네일 이미지 영역 */}
                   <div className="relative mb-4">
-                    <div className="aspect-square bg-cream border border-secondary flex items-center justify-center overflow-hidden">
+                    <div className="aspect-square bg-[#FAFAF8] border border-secondary flex items-center justify-center overflow-hidden">
                       {item.layoutImage ? (
                         <img 
                           src={item.layoutImage} 
                           alt="코디 레이아웃 미리보기" 
-                          className="w-full h-full object-contain bg-cream"
+                          className="w-full h-full object-contain bg-[#FAFAF8]"
                         />
                       ) : item.beforeItems.length > 0 && item.beforeItems[0].imageUrl ? (
                         <img 
                           src={item.beforeItems[0].imageUrl} 
                           alt="코디 미리보기" 
-                          className="w-full h-full object-contain bg-cream"
+                          className="w-full h-full object-contain bg-[#FAFAF8]"
                         />
                       ) : (
                         <div className="text-secondary text-xs">이미지 미리보기</div>
@@ -251,7 +251,7 @@ const History = () => {
                     {/* 분석 결과 요약 */}
                     {topColors.length > 0 && (
                       <div className="pt-2">
-                        <div className="bg-cream border border-secondary px-4 py-2 w-full">
+                        <div className="bg-[#FAFAF8] border border-secondary px-4 py-2 w-full">
                           <div className="text-xs text-secondary mb-2 uppercase tracking-wider">색상</div>
                           <div className="flex space-x-1">
                             {topColors.map((color, colorIndex) => (
@@ -277,7 +277,7 @@ const History = () => {
                           console.log('localStorage 저장 완료')
                           navigate('/')
                         }}
-                        className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full hover:bg-primary transition-all"
+                        className="flex-1 px-3 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full hover:bg-secondary hover:text-cream transition-all"
                       >
                         불러오기
                       </button>
@@ -312,7 +312,7 @@ const History = () => {
                             }
                           }
                         }}
-                        className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full hover:bg-primary transition-all"
+                        className="flex-1 px-3 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full hover:bg-secondary hover:text-cream transition-all"
                       >
                         삭제
                       </button>
@@ -326,12 +326,12 @@ const History = () => {
                 return (
                   <div
                     key={`empty-${i}`}
-                    className={`bg-cream border-secondary p-6 ${
+                    className={`bg-[#FAFAF8] border-secondary p-6 ${
                       emptyIndex % 5 !== 4 ? 'border-r' : ''
                     } ${emptyIndex < 5 ? 'border-b' : ''}`}
                   >
                     <div className="relative mb-4">
-                      <div className="aspect-square bg-cream flex items-center justify-center overflow-hidden" />
+                      <div className="aspect-square bg-[#FAFAF8] flex items-center justify-center overflow-hidden" />
                     </div>
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
@@ -341,7 +341,7 @@ const History = () => {
                         <div className="text-xs text-secondary opacity-0">날짜</div>
                       </div>
                       <div className="pt-2">
-                        <div className="bg-cream px-4 py-2 w-full">
+                        <div className="bg-[#FAFAF8] px-4 py-2 w-full">
                           <div className="text-xs text-secondary mb-2 uppercase tracking-wider opacity-0">색상</div>
                           <div className="flex space-x-1">
                             <div className="w-3 h-3" />
@@ -349,10 +349,10 @@ const History = () => {
                         </div>
                       </div>
                       <div className="pt-3 flex gap-2">
-                        <div className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full opacity-0">
+                        <div className="flex-1 px-3 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full opacity-0">
                           불러오기
                         </div>
-                        <div className="flex-1 px-3 py-2 bg-cream border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full opacity-0">
+                        <div className="flex-1 px-3 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full opacity-0">
                           삭제
                         </div>
                       </div>
@@ -379,19 +379,19 @@ const History = () => {
         {/* 페이지네이션 */}
         <div className="h-24 border-t border-secondary flex items-center justify-center">
           <div className="flex items-center gap-1">
-                <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
+                <button className="w-10 h-10 text-xs text-secondary hover:bg-secondary hover:text-cream border border-secondary transition-all rounded-full flex items-center justify-center">
               이전
             </button>
-                <button className="w-10 h-10 bg-secondary text-cream border border-secondary hover:bg-secondary-dark transition-all text-xs rounded-full flex items-center justify-center">
+                <button className="w-10 h-10 bg-secondary text-cream border border-secondary hover:bg-secondary transition-all text-xs rounded-full flex items-center justify-center">
               1
             </button>
-                <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
+                <button className="w-10 h-10 text-xs text-secondary hover:bg-secondary hover:text-cream border border-secondary transition-all rounded-full flex items-center justify-center">
               2
             </button>
-                <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
+                <button className="w-10 h-10 text-xs text-secondary hover:bg-secondary hover:text-cream border border-secondary transition-all rounded-full flex items-center justify-center">
               3
             </button>
-                <button className="w-10 h-10 text-xs text-secondary hover:bg-primary border border-secondary transition-all rounded-full flex items-center justify-center">
+                <button className="w-10 h-10 text-xs text-secondary hover:bg-secondary hover:text-cream border border-secondary transition-all rounded-full flex items-center justify-center">
               다음
             </button>
           </div>

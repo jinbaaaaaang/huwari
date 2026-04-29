@@ -10,11 +10,11 @@ const Layout = ({ children }: LayoutProps) => {
   const location = useLocation()
 
   return (
-    <div className="bg-cream">
+    <div className="bg-[#FAFAF8]">
       {/* Grid-based Minimal Layout */}
       <div className="grid grid-cols-12">
         {/* Left Sidebar - Fixed with Header */}
-        <aside className="col-span-12 lg:col-span-2 bg-cream border-r border-secondary sticky top-0 h-screen overflow-y-auto">
+        <aside className="col-span-12 lg:col-span-2 bg-[#FAFAF8] border-r border-secondary sticky top-0 h-screen overflow-y-auto">
           <div className="grid grid-rows-[auto_auto_1fr_auto] h-full">
             {/* Header in Sidebar - 코디 업로드/코디 평가와 같은 높이 */}
             <div className="row-span-1">
@@ -82,7 +82,7 @@ const Layout = ({ children }: LayoutProps) => {
         </aside>
 
         {/* Main Content Area */}
-        <main className="col-span-12 lg:col-span-10 h-screen overflow-y-auto">
+        <main className="col-span-12 lg:col-span-10 h-screen overflow-y-auto bg-[#FAFAF8]">
           {children}
         </main>
       </div>

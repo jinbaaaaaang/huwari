@@ -15,7 +15,7 @@ const CharacterDisplay = ({ harmonyLevel = 'normal' }: CharacterDisplayProps) =>
   }
 
   return (
-    <div className="bg-cream rounded-2xl shadow-xl p-6 border border-secondary">
+    <div className="bg-[#FAFAF8] rounded-2xl shadow-xl p-6 border border-secondary">
       <h3 className="text-xl font-semibold text-secondary mb-4">조화 상태</h3>
       <div className="flex justify-center">
         <img src={getCharacterSrc()} alt="Gini" className="w-32 h-32" />

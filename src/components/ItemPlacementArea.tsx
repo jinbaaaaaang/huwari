@@ -455,7 +455,7 @@ const ItemPlacementArea = ({
       }
 
       // 배경색 설정 (cream 색상 - Tailwind와 동일)
-      ctx.fillStyle = '#FDF5F8' // cream 색상 (Tailwind config와 동일)
+      ctx.fillStyle = '#FFFFFF' // white 배경
       ctx.fillRect(0, 0, canvas.width, canvas.height)
 
       // 각 아이템을 캔버스에 그리기 (순서대로)
@@ -502,7 +502,7 @@ const ItemPlacementArea = ({
       <div className="absolute top-6 right-5 z-10 flex flex-col gap-2 items-end">
         <button 
           onClick={handleButtonClick}
-          className="px-4 py-2 bg-cream border border-secondary text-secondary text-xs font-medium transition-all uppercase tracking-wider rounded-full flex items-center gap-1.5" 
+          className="px-4 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-medium hover:bg-secondary hover:text-cream transition-all uppercase tracking-wider rounded-full flex items-center gap-1.5" 
         >
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={iconPath} />
@@ -518,7 +518,7 @@ const ItemPlacementArea = ({
               }
             }
           }}
-          className="px-4 py-2 bg-cream border border-secondary text-secondary text-xs font-medium transition-all uppercase tracking-wider rounded-full flex items-center gap-1.5 w-fit" 
+          className="px-4 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-medium hover:bg-secondary hover:text-cream transition-all uppercase tracking-wider rounded-full flex items-center gap-1.5 w-fit" 
         >
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -574,7 +574,7 @@ const ItemPlacementArea = ({
               alert('저장 중 오류가 발생했습니다.')
             }
           }}
-          className="px-4 py-2 bg-cream border border-secondary text-secondary text-xs font-medium transition-all uppercase tracking-wider rounded-full flex items-center gap-1.5 w-fit" 
+          className="px-4 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-medium hover:bg-secondary hover:text-cream transition-all uppercase tracking-wider rounded-full flex items-center gap-1.5 w-fit" 
         >
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
@@ -633,7 +633,7 @@ const ItemPlacementArea = ({
 
         {/* 통합 처리 중 표시 (화면 중앙) */}
         {processingCount > 0 && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 rounded-lg p-8 bg-cream border border-secondary">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 rounded-lg p-8 bg-[#FAFAF8] border border-secondary">
             <div className="text-center">
               {/* 기니피그 이미지 - 부드러운 바운스 애니메이션 */}
               <div className="w-20 h-20 mx-auto mb-4">
@@ -711,7 +711,7 @@ const ItemPlacementArea = ({
             )}
             
             {/* 추출된 색상 및 속성 표시 (오른쪽 중앙) */}
-            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 opacity-0 group-hover:opacity-100 transition-opacity z-20 bg-cream backdrop-blur-sm rounded-lg p-2 shadow-lg border border-secondary min-w-[120px]">
+            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 opacity-0 group-hover:opacity-100 transition-opacity z-20 bg-[#FAFAF8] backdrop-blur-sm rounded-lg p-2 shadow-lg border border-secondary min-w-[120px]">
               {/* 색상 표시 */}
               {item.colors && item.colors.length > 0 && (
                 <div className="flex gap-1 justify-center mb-2">

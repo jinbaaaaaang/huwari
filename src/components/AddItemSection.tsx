@@ -12,7 +12,7 @@ const AddItemSection = () => {
   }
 
   return (
-    <div className="bg-cream rounded-2xl shadow-xl p-6 border border-secondary">
+    <div className="bg-[#FAFAF8] rounded-2xl shadow-xl p-6 border border-secondary">
       <h3 className="text-xl font-semibold text-secondary mb-4">추가 아이템 분석</h3>
       
       <div className="border border-secondary rounded-xl p-6 text-center hover:border-secondary transition-colors bg-primary">
@@ -26,7 +26,7 @@ const AddItemSection = () => {
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="px-6 py-2 bg-secondary text-cream rounded-lg hover:bg-secondary-dark transition-all shadow-lg"
+          className="px-6 py-2 bg-[#FAFAF8] border border-secondary text-secondary rounded-lg hover:bg-secondary hover:text-cream transition-all shadow-lg"
         >
           아이템 추가
         </button>

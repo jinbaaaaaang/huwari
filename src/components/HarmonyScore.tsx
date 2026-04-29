@@ -8,7 +8,7 @@ const HarmonyScore = ({ score }: HarmonyScoreProps) => {
   const offset = circumference - (displayScore / 100) * circumference
 
   return (
-    <div className="bg-cream rounded-2xl shadow-xl p-6 border border-secondary">
+    <div className="bg-[#FAFAF8] rounded-2xl shadow-xl p-6 border border-secondary">
       <h3 className="text-xl font-semibold text-secondary mb-4">조화 점수</h3>
       
       <div className="text-center">

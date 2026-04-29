@@ -4,7 +4,7 @@ interface PredictionResultProps {
 
 const PredictionResult = ({ prediction }: PredictionResultProps) => {
   return (
-    <div className="bg-cream rounded-2xl shadow-xl p-6 border border-secondary">
+    <div className="bg-[#FAFAF8] rounded-2xl shadow-xl p-6 border border-secondary">
       <h3 className="text-xl font-semibold text-secondary mb-4">예측 결과</h3>
       
       <div className="space-y-4">
