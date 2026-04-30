@@ -30,10 +30,27 @@ interface HistoryItem {
   createdAt: string
 }
 
+const HISTORY_UI_KEY = 'huwari_history_filters'
+
+function readHistoryUiState() {
+  try {
+    const raw = sessionStorage.getItem(HISTORY_UI_KEY)
+    if (!raw) return { sortBy: 'latest', filterBy: 'all' }
+    const p = JSON.parse(raw) as { sortBy?: string; filterBy?: string }
+    return {
+      sortBy: typeof p.sortBy === 'string' ? p.sortBy : 'latest',
+      filterBy: typeof p.filterBy === 'string' ? p.filterBy : 'all',
+    }
+  } catch {
+    return { sortBy: 'latest', filterBy: 'all' }
+  }
+}
+
 const History = () => {
   const navigate = useNavigate()
-  const [sortBy, setSortBy] = useState('latest')
-  const [filterBy, setFilterBy] = useState('all')
+  const initialUi = readHistoryUiState()
+  const [sortBy, setSortBy] = useState(initialUi.sortBy)
+  const [filterBy, setFilterBy] = useState(initialUi.filterBy)
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
@@ -43,6 +60,14 @@ const History = () => {
     { value: 'score-high', label: '조화 점수\n높은순' },
     { value: 'score-low', label: '조화 점수\n낮은순' },
   ]
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(HISTORY_UI_KEY, JSON.stringify({ sortBy, filterBy }))
+    } catch {
+      /* ignore */
+    }
+  }, [sortBy, filterBy])
 
   useEffect(() => {
     const fetchHistory = async () => {

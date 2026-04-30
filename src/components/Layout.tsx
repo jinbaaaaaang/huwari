@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 import Header from './Header'
 import Footer from './Footer'
+import MouseStarTrail from './MouseStarTrail'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -11,6 +12,7 @@ const Layout = ({ children }: LayoutProps) => {
 
   return (
     <div className="bg-[#FAFAF8]">
+      <MouseStarTrail />
       {/* Grid-based Minimal Layout */}
       <div className="grid grid-cols-12">
         {/* Left Sidebar - Fixed with Header */}

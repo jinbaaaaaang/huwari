@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import Layout from '../components/Layout'
 import ItemPlacementArea from '../components/ItemPlacementArea'
@@ -26,9 +26,41 @@ interface HarmonyScore {
   debug: any
 }
 
+const LS_ITEMS = 'currentItems'
+const LS_LOAD_HISTORY = 'loadHistoryItems'
+const LS_HARMONY_CACHE = 'huwari_harmony_cache'
+const LS_INPUT_MODE = 'huwari_input_mode'
+
+function itemSignature(items: PlacedItem[]) {
+  return [...items].map((i) => i.id).sort().join('\0')
+}
+
+function readHarmonyCacheForItems(items: PlacedItem[]): HarmonyScore | null {
+  if (items.length === 0) return null
+  try {
+    const raw = localStorage.getItem(LS_HARMONY_CACHE)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { signature?: string; harmonyScore?: HarmonyScore }
+    if (parsed.signature === itemSignature(items) && parsed.harmonyScore) {
+      return parsed.harmonyScore
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
 function Home() {
   const location = useLocation()
-  const [inputMode, setInputMode] = useState<'upload' | 'webcam'>('upload')
+  const [inputMode, setInputMode] = useState<'upload' | 'webcam'>(() => {
+    try {
+      const m = localStorage.getItem(LS_INPUT_MODE)
+      if (m === 'webcam' || m === 'upload') return m
+    } catch {
+      /* ignore */
+    }
+    return 'upload'
+  })
   const [beforeItems, setBeforeItems] = useState<PlacedItem[]>([])
   const [afterItems] = useState<PlacedItem[]>([])
   const [harmonyScore, setHarmonyScore] = useState<HarmonyScore | null>(null)
@@ -39,35 +71,35 @@ function Home() {
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null)
   const webcamStreamRef = useRef<MediaStream | null>(null)
+  const beforeItemsRef = useRef<PlacedItem[]>([])
+  beforeItemsRef.current = beforeItems
 
-  // 페이지 로드 및 경로 변경 시 아이템 복원
-  useEffect(() => {
-    // 1. 히스토리에서 불러온 아이템이 있으면 우선 사용
-    const loadHistoryItems = localStorage.getItem('loadHistoryItems')
-    console.log('loadHistoryItems:', loadHistoryItems)
+  // paint 전에 복원해야 빈 배열 persist effect가 currentItems를 지우는 레이스를 막을 수 있음
+  useLayoutEffect(() => {
+    const loadHistoryItems = localStorage.getItem(LS_LOAD_HISTORY)
     if (loadHistoryItems) {
       try {
-        const items = JSON.parse(loadHistoryItems)
-        console.log('파싱된 아이템:', items)
+        const items = JSON.parse(loadHistoryItems) as PlacedItem[]
         if (Array.isArray(items) && items.length > 0) {
-          console.log('beforeItems 설정:', items)
           setBeforeItems(items)
-          localStorage.removeItem('loadHistoryItems')
-          // 히스토리에서 불러온 아이템도 currentItems에 저장
-          localStorage.setItem('currentItems', JSON.stringify(items))
+          localStorage.removeItem(LS_LOAD_HISTORY)
+          localStorage.setItem(LS_ITEMS, JSON.stringify(items))
+          const cached = readHarmonyCacheForItems(items)
+          if (cached) setHarmonyScore(cached)
         }
       } catch (error) {
         console.error('히스토리 불러오기 오류:', error)
-        localStorage.removeItem('loadHistoryItems')
+        localStorage.removeItem(LS_LOAD_HISTORY)
       }
     } else {
-      // 2. 히스토리에서 불러온 아이템이 없으면 저장된 아이템 복원
-      const savedItems = localStorage.getItem('currentItems')
+      const savedItems = localStorage.getItem(LS_ITEMS)
       if (savedItems) {
         try {
-          const items = JSON.parse(savedItems)
+          const items = JSON.parse(savedItems) as PlacedItem[]
           if (Array.isArray(items) && items.length > 0) {
             setBeforeItems(items)
+            const cached = readHarmonyCacheForItems(items)
+            if (cached) setHarmonyScore(cached)
           }
         } catch (error) {
           console.error('저장된 아이템 불러오기 오류:', error)
@@ -76,15 +108,40 @@ function Home() {
     }
   }, [location.pathname])
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_INPUT_MODE, inputMode)
+    } catch {
+      /* ignore */
+    }
+  }, [inputMode])
+
   // beforeItems 변경 시 localStorage에 저장 (초기화 버튼을 누르지 않는 한 유지)
   useEffect(() => {
     if (beforeItems.length > 0) {
-      localStorage.setItem('currentItems', JSON.stringify(beforeItems))
+      localStorage.setItem(LS_ITEMS, JSON.stringify(beforeItems))
     } else {
-      // 빈 배열일 때는 저장하지 않음 (초기화된 상태)
-      localStorage.removeItem('currentItems')
+      localStorage.removeItem(LS_ITEMS)
+      localStorage.removeItem(LS_HARMONY_CACHE)
     }
   }, [beforeItems])
+
+  useEffect(() => {
+    if (!harmonyScore) return
+    const items = beforeItemsRef.current
+    if (items.length === 0) return
+    try {
+      localStorage.setItem(
+        LS_HARMONY_CACHE,
+        JSON.stringify({
+          signature: itemSignature(items),
+          harmonyScore,
+        })
+      )
+    } catch {
+      /* ignore */
+    }
+  }, [harmonyScore])
 
   // Before 아이템들의 질감, 패턴, 스타일 정보 종합
   const beforeFashionAttributes = useMemo(() => {
@@ -181,12 +238,13 @@ function Home() {
     // Before 아이템이 없으면 점수 표시 안 함
     if (beforeItems.length === 0) {
       setHarmonyScore(null)
+      setIsLoadingHarmony(false)
       return
     }
 
-    // 400ms debounce
-    setIsLoadingHarmony(true)
+    // 400ms debounce (복원 직후에는 로딩 표시를 지연해 캐시 점수가 보이게 함)
     debounceTimerRef.current = setTimeout(async () => {
+      setIsLoadingHarmony(true)
       try {
         const response = await fetch('http://localhost:8000/api/predict-harmony', {
           method: 'POST',
@@ -477,7 +535,8 @@ function Home() {
                     onItemsChange={setBeforeItems}
                     onReset={() => {
                       setBeforeItems([])
-                      localStorage.removeItem('currentItems')
+                      localStorage.removeItem(LS_ITEMS)
+                      localStorage.removeItem(LS_HARMONY_CACHE)
                     }}
                     harmonyScore={harmonyScore}
                     initialItems={beforeItems}
