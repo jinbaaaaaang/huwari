@@ -128,14 +128,6 @@ const History = () => {
     return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`
   }
 
-  // 색상 추출 (첫 번째 아이템의 상위 3개 색상)
-  const getTopColors = (item: HistoryItem) => {
-    if (item.beforeItems.length === 0) return []
-    const firstItem = item.beforeItems[0]
-    if (!firstItem.colors || firstItem.colors.length === 0) return []
-    return firstItem.colors.slice(0, 3)
-  }
-  
   return (
     <Layout>
       <div className="h-screen flex flex-col bg-[#FAFAF8]">
@@ -186,11 +178,11 @@ const History = () => {
         </div>
 
         {/* 히스토리 목록 */}
-        <div className="relative z-0 grid grid-cols-5 grid-rows-2 flex-1 min-h-0 overflow-hidden">
+        <div className="relative z-0 grid flex-1 min-h-0 grid-cols-5 overflow-hidden [grid-template-rows:repeat(2,minmax(0,1fr))]">
           {isLoading ? (
             <>
               {[...Array(10)].map((_, i) => (
-                <div key={i} className={`bg-[#FAFAF8] border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
+                <div key={i} className={`min-h-0 overflow-hidden bg-[#FAFAF8] border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
                   <div className="relative mb-4">
                     <div className="aspect-square bg-[#FAFAF8] border border-secondary flex items-center justify-center">
                       <div className="text-xs text-secondary">로딩 중...</div>
@@ -208,35 +200,32 @@ const History = () => {
               ))}
             </>
           ) : visibleHistory.length === 0 ? (
-            <>
-              {[...Array(10)].map((_, i) => (
-                <div key={i} className={`bg-[#FAFAF8] border-secondary p-6 ${i % 5 !== 4 ? 'border-r' : ''} ${i < 5 ? 'border-b' : ''}`}>
-                  <div className="relative mb-4">
-                    <div className="aspect-square bg-[#FAFAF8] border border-secondary flex items-center justify-center">
-                      
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="h-6"></div>
-                    <div className="h-8"></div>
-                    <div className="pt-3 flex gap-2">
-                      <div className="flex-1 h-8"></div>
-                      <div className="flex-1 h-8"></div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </>
+            <div className="col-span-5 row-span-2 flex flex-col items-center justify-center gap-3 px-6 py-12 text-center min-h-[200px]">
+              <p className="text-sm text-secondary">
+                저장된 히스토리가 없습니다.
+              </p>
+              <p className="text-xs text-secondary/70 max-w-md leading-relaxed">
+                홈에서 코디를 저장하면 이 목록에 카드가 생기며, 각 카드에서{' '}
+                <span className="text-secondary">불러오기</span>·
+                <span className="text-secondary">삭제</span>를 사용할 수 있어요.
+              </p>
+              <button
+                type="button"
+                onClick={() => navigate('/')}
+                className="mt-2 px-5 py-2 border border-secondary rounded-full text-xs text-secondary uppercase tracking-wider hover:bg-secondary hover:text-cream transition-all"
+              >
+                홈으로
+              </button>
+            </div>
           ) : (
             <>
               {visibleHistory.map((item, index) => {
-                const topColors = getTopColors(item)
                 const score = Math.round(item.harmonyScore.score_total)
-                
+
                 return (
                   <div
                     key={item.id}
-                    className={`bg-[#FAFAF8] border-secondary p-6 hover:bg-[#FAFAF8] transition-all cursor-pointer ${
+                    className={`min-h-0 overflow-hidden bg-[#FAFAF8] border-secondary p-6 hover:bg-[#FAFAF8] transition-all ${
                       index % 5 !== 4 ? 'border-r' : ''
                     } ${index < 5 ? 'border-b' : ''}`}
                   >
@@ -272,24 +261,6 @@ const History = () => {
                       </h3>
                       <span className="text-xs text-secondary">{formatDate(item.createdAt)}</span>
                     </div>
-                    
-                    {/* 분석 결과 요약 */}
-                    {topColors.length > 0 && (
-                      <div className="pt-2">
-                        <div className="bg-[#FAFAF8] border border-secondary px-4 py-2 w-full">
-                          <div className="text-xs text-secondary mb-2 uppercase tracking-wider">색상</div>
-                          <div className="flex space-x-1">
-                            {topColors.map((color, colorIndex) => (
-                              <div
-                                key={colorIndex}
-                                className="w-3 h-3 rounded-full border border-secondary"
-                                style={{ backgroundColor: color.hex }}
-                              ></div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
 
                     {/* 버튼 영역 */}
                     <div className="pt-3 flex gap-2">
@@ -297,10 +268,10 @@ const History = () => {
                         onClick={(e) => {
                           e.stopPropagation()
                           // localStorage에 히스토리 아이템 저장 후 Home으로 이동
-                          console.log('불러오기 클릭, 아이템:', item.beforeItems)
                           localStorage.setItem('loadHistoryItems', JSON.stringify(item.beforeItems))
-                          console.log('localStorage 저장 완료')
-                          navigate('/')
+                          navigate('/', {
+                            state: { restoreBeforeItems: item.beforeItems },
+                          })
                         }}
                         className="flex-1 px-3 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full hover:bg-secondary hover:text-cream transition-all"
                       >
@@ -351,7 +322,7 @@ const History = () => {
                 return (
                   <div
                     key={`empty-${i}`}
-                    className={`bg-[#FAFAF8] border-secondary p-6 ${
+                    className={`min-h-0 overflow-hidden bg-[#FAFAF8] border-secondary p-6 ${
                       emptyIndex % 5 !== 4 ? 'border-r' : ''
                     } ${emptyIndex < 5 ? 'border-b' : ''}`}
                   >
@@ -364,14 +335,6 @@ const History = () => {
                           코디 분석
                         </div>
                         <div className="text-xs text-secondary opacity-0">날짜</div>
-                      </div>
-                      <div className="pt-2">
-                        <div className="bg-[#FAFAF8] px-4 py-2 w-full">
-                          <div className="text-xs text-secondary mb-2 uppercase tracking-wider opacity-0">색상</div>
-                          <div className="flex space-x-1">
-                            <div className="w-3 h-3" />
-                          </div>
-                        </div>
                       </div>
                       <div className="pt-3 flex gap-2">
                         <div className="flex-1 px-3 py-2 bg-[#FAFAF8] border border-secondary text-secondary text-xs font-regular uppercase tracking-wider rounded-full opacity-0">

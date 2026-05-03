@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import Layout from '../components/Layout'
 import ItemPlacementArea from '../components/ItemPlacementArea'
 
@@ -50,11 +50,32 @@ function readHarmonyCacheForItems(items: PlacedItem[]): HarmonyScore | null {
   return null
 }
 
+/** localStorage만 읽고 키는 건드리지 않음(Strict/이펙트 순서 안전) */
+function readInitialBeforeItemsFromStorage(): PlacedItem[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const pending = localStorage.getItem(LS_LOAD_HISTORY)
+    if (pending) {
+      const parsed = JSON.parse(pending) as PlacedItem[]
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+    const saved = localStorage.getItem(LS_ITEMS)
+    if (saved) {
+      const parsed = JSON.parse(saved) as PlacedItem[]
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch {
+    /* ignore */
+  }
+  return []
+}
+
 /** 피드백 패널에 기본으로 보이는 기니피그(행) 개수 */
 const FEEDBACK_MIN_ROWS = 4
 
 function Home() {
   const location = useLocation()
+  const navigate = useNavigate()
   const [inputMode, setInputMode] = useState<'upload' | 'webcam'>(() => {
     try {
       const m = localStorage.getItem(LS_INPUT_MODE)
@@ -64,7 +85,7 @@ function Home() {
     }
     return 'upload'
   })
-  const [beforeItems, setBeforeItems] = useState<PlacedItem[]>([])
+  const [beforeItems, setBeforeItems] = useState<PlacedItem[]>(readInitialBeforeItemsFromStorage)
   const [afterItems] = useState<PlacedItem[]>([])
   const [harmonyScore, setHarmonyScore] = useState<HarmonyScore | null>(null)
   const [isLoadingHarmony, setIsLoadingHarmony] = useState(false)
@@ -77,8 +98,20 @@ function Home() {
   const beforeItemsRef = useRef<PlacedItem[]>([])
   beforeItemsRef.current = beforeItems
 
-  // paint 전에 복원해야 빈 배열 persist effect가 currentItems를 지우는 레이스를 막을 수 있음
+  // 라우터 state 복원 + loadHistoryItems 키 정리·LS 동기화(초기 state는 lazy read로 이미 채워질 수 있음)
   useLayoutEffect(() => {
+    const navState = location.state as { restoreBeforeItems?: PlacedItem[] } | null | undefined
+    const fromNav = navState?.restoreBeforeItems
+    if (fromNav && Array.isArray(fromNav) && fromNav.length > 0) {
+      setBeforeItems(fromNav)
+      localStorage.setItem(LS_ITEMS, JSON.stringify(fromNav))
+      localStorage.removeItem(LS_LOAD_HISTORY)
+      const cached = readHarmonyCacheForItems(fromNav)
+      if (cached) setHarmonyScore(cached)
+      navigate(location.pathname, { replace: true, state: {} })
+      return
+    }
+
     const loadHistoryItems = localStorage.getItem(LS_LOAD_HISTORY)
     if (loadHistoryItems) {
       try {
@@ -94,22 +127,8 @@ function Home() {
         console.error('히스토리 불러오기 오류:', error)
         localStorage.removeItem(LS_LOAD_HISTORY)
       }
-    } else {
-      const savedItems = localStorage.getItem(LS_ITEMS)
-      if (savedItems) {
-        try {
-          const items = JSON.parse(savedItems) as PlacedItem[]
-          if (Array.isArray(items) && items.length > 0) {
-            setBeforeItems(items)
-            const cached = readHarmonyCacheForItems(items)
-            if (cached) setHarmonyScore(cached)
-          }
-        } catch (error) {
-          console.error('저장된 아이템 불러오기 오류:', error)
-        }
-      }
     }
-  }, [location.pathname])
+  }, [location.pathname, location.key, location.state, navigate])
 
   useEffect(() => {
     try {
@@ -124,9 +143,23 @@ function Home() {
     if (beforeItems.length > 0) {
       localStorage.setItem(LS_ITEMS, JSON.stringify(beforeItems))
     } else {
+      try {
+        if (localStorage.getItem(LS_LOAD_HISTORY)) return
+      } catch {
+        /* ignore */
+      }
       localStorage.removeItem(LS_ITEMS)
       localStorage.removeItem(LS_HARMONY_CACHE)
     }
+  }, [beforeItems])
+
+  // lazy 초기화로만 아이템이 채워진 경우(LS 복원) 조화 캐시 복원
+  useEffect(() => {
+    if (beforeItems.length === 0) return
+    setHarmonyScore((prev) => {
+      if (prev != null) return prev
+      return readHarmonyCacheForItems(beforeItems) ?? prev
+    })
   }, [beforeItems])
 
   useEffect(() => {
@@ -184,32 +217,29 @@ function Home() {
     }
   }, [beforeItems])
 
-
   // Before 아이템들의 색상을 종합하여 상위 5개 선택
   const beforeTopColors = useMemo(() => {
     const allColors: Array<{ hex: string; percentage: number; rgb: number[] }> = []
-    
-    // Before 아이템들의 색상
-    beforeItems.forEach(item => {
+
+    beforeItems.forEach((item) => {
       if (item.colors && item.colors.length > 0) {
-        item.colors.forEach(color => {
+        item.colors.forEach((color) => {
           allColors.push({
             hex: color.hex,
             percentage: color.percentage,
-            rgb: color.rgb
+            rgb: color.rgb,
           })
         })
       }
     })
-    
+
     if (allColors.length === 0) {
       return []
     }
-    
-    // 같은 HEX 색상끼리 그룹화하고 비율 합산
+
     const colorMap = new Map<string, { hex: string; totalPercentage: number; rgb: number[] }>()
-    
-    allColors.forEach(color => {
+
+    allColors.forEach((color) => {
       const existing = colorMap.get(color.hex)
       if (existing) {
         existing.totalPercentage += color.percentage
@@ -217,17 +247,14 @@ function Home() {
         colorMap.set(color.hex, {
           hex: color.hex,
           totalPercentage: color.percentage,
-          rgb: color.rgb
+          rgb: color.rgb,
         })
       }
     })
-    
-    // 비율이 높은 순으로 정렬
-    const sortedColors = Array.from(colorMap.values())
+
+    return Array.from(colorMap.values())
       .sort((a, b) => b.totalPercentage - a.totalPercentage)
-      .slice(0, 5) // 상위 5개만 선택
-    
-    return sortedColors
+      .slice(0, 5)
   }, [beforeItems])
 
   const feedbackRows = useMemo(() => {
@@ -616,7 +643,7 @@ function Home() {
             </div>
 
             {/* 분석 결과 */}
-            <div className="bg-[#FAFAF8] p-4 border-t border-secondary overflow-y-auto scrollbar-thin h-[260px]">
+            <div className="bg-[#FAFAF8] p-4 border-t border-secondary h-[260px] overflow-y-auto scrollbar-thin shrink-0">
               <h4 className="text-xs font-regular text-secondary mb-4 uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">분석 결과</h4>
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-[#FAFAF8] p-3 flex flex-col">
@@ -709,52 +736,15 @@ function Home() {
               <h3 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">코디 평가</h3>
             </div>
             
-            {/* 조화 점수, 캐릭터, 분석 이유 - flex-1 영역 */}
+            {/* 피드백(위) + 점수/조화(아래 260px) — 왼쪽 분석 결과 패널과 높이·구분선 정렬 */}
             <div className="flex-1 flex flex-col min-h-0">
-              {/* 조화 점수와 캐릭터 */}
-              <div className="p-4 border-b border-secondary shrink-0">
-                <div className="grid grid-cols-2 gap-3">
-                  {/* 조화 점수 */}
-                  <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
-                    <div className="w-28 h-28 bg-secondary flex items-center justify-center rounded-full mb-2">
-                      {isLoadingHarmony ? (
-                        <div className="text-sm text-cream">계산 중...</div>
-                      ) : (
-                        <div className="text-4xl font-light text-cream">
-                          {harmonyScore ? Math.round(harmonyScore.score_total) : '-'}
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-xs text-secondary uppercase tracking-wider">점수</div>
-                  </div>
-
-                  {/* 캐릭터 표시 */}
-                  <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
-                    <div className="w-28 h-28 bg-secondary flex items-center justify-center rounded-full mb-2">
-                      <img 
-                        src={getCharacterImage()} 
-                        alt="Gini" 
-                        className="w-20 h-20"
-                        onError={(e) => {
-                          const target = e.target as HTMLImageElement
-                          target.src = '/assets/normal_gini.svg'
-                        }}
-                      />
-                    </div>
-                    <div className="text-xs text-secondary uppercase tracking-wider">조화 상태</div>
-                  </div>
-                </div>
-              </div>
-
               {/* 피드백 */}
               <div className="flex-1 min-h-0 flex flex-col bg-[#FAFAF8]">
                 <div className="shrink-0 px-4 pt-4 pb-2">
-                  <h4 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">
-                    피드백
-                  </h4>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 pb-5">
-                  <div className="space-y-4">
+                  <div className="min-h-full flex flex-col justify-center py-4">
+                    <div className="space-y-4">
                     {feedbackRows.map((row) => {
                       const hasText = row.text != null && row.text !== ''
                       return (
@@ -797,6 +787,40 @@ function Home() {
                         </div>
                       )
                     })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 조화 점수와 캐릭터 — 왼쪽 분석 결과와 동일 h·border-t */}
+              <div className="h-[260px] shrink-0 border-t border-secondary bg-[#FAFAF8] p-4 overflow-hidden flex flex-col justify-center">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
+                    <div className="w-28 h-28 bg-secondary flex items-center justify-center rounded-full mb-2">
+                      {isLoadingHarmony ? (
+                        <div className="text-sm text-cream">계산 중...</div>
+                      ) : (
+                        <div className="text-4xl font-light text-cream">
+                          {harmonyScore ? Math.round(harmonyScore.score_total) : '-'}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-xs text-secondary uppercase tracking-wider">점수</div>
+                  </div>
+
+                  <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
+                    <div className="w-28 h-28 bg-secondary flex items-center justify-center rounded-full mb-2">
+                      <img
+                        src={getCharacterImage()}
+                        alt="Gini"
+                        className="w-20 h-20"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement
+                          target.src = '/assets/normal_gini.svg'
+                        }}
+                      />
+                    </div>
+                    <div className="text-xs text-secondary uppercase tracking-wider">조화 상태</div>
                   </div>
                 </div>
               </div>

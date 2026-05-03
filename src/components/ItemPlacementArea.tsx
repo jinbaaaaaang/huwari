@@ -76,13 +76,18 @@ const ItemPlacementArea = ({
   }, [initialItems, initialItemsKey])
 
   // placedItems 변경 시 상위에 동기화 (texture/pattern/style 등 id 외 필드만 바뀐 경우 포함)
+  // 히스토리 불러오기 등: 부모가 initialItems를 준 직후 placedItems는 아직 []인 틱이 있어,
+  // 그때 onItemsChange([])가 나가면 복원이 지워지므로 동기화 전에는 빈 배열을 올리지 않음
   useEffect(() => {
     if (!onItemsChange) return
     const json = JSON.stringify(placedItems)
     if (prevPlacedJsonRef.current === json) return
+    if (placedItems.length === 0 && initialItems && initialItems.length > 0) {
+      return
+    }
     prevPlacedJsonRef.current = json
     onItemsChange(placedItems)
-  }, [placedItems, onItemsChange])
+  }, [placedItems, onItemsChange, initialItems])
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
   const [resizingItem, setResizingItem] = useState<string | null>(null)
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0 })
