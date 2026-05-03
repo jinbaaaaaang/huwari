@@ -308,3 +308,184 @@ flowchart LR
 - **세트 단위 판단 구조**: 개별 점수 합산이 아니라, 세트 전체 상호작용을 attention 기반으로 모델링
 - **설명 가능성 개선**: 조화 점수와 속성 설명이 동일 표현에서 일관되게 나오도록 정렬
 
+---
+
+## 개선 파이프라인 (현재 서비스)
+
+
+### 설계 목표
+
+1. **세트 단위 조화**: 여러 아이템을 같은 장면으로 보고 0~1(서비스에서는 ×100) 점수를 낸다.  
+2. **표시용 속성**: UI·히스토리용 재질·패턴·스타일은 학습된 **Fashion MTL**(`fashion_mtl_model.pt`)로 채운다.  
+3. **가벼운 자연어 피드백**: **CLIP**으로 코디 패널 이미지와 영어 프롬프트의 정합도를 보고, 한국어 라벨 몇 줄을 `reasons`에 덧붙인다.  
+4. **전신 입력**: **YOLOv8n**(클래스 0=person)으로 사람 박스를 잡고, 키 높이 비율로 상·하 크롭을 만든 뒤 같은 조화 함수를 태운다.
+
+---
+
+### 시스템 맥락 (개발 환경)
+
+```mermaid
+flowchart LR
+  subgraph browser [브라우저 localhost:3000]
+    UI[Vite + React]
+  end
+  subgraph proxy [Vite devServer]
+    P["/api → proxy"]
+  end
+  subgraph api [FastAPI localhost:8000]
+    M[main:app]
+  end
+  UI -->|fetch /api/...| P
+  P -->|forward| M
+```
+
+`vite.config.ts`: `server.port = 3000`, `proxy['/api'].target = 'http://localhost:8000'`.
+
+---
+
+### FashionHarmonyModel 내부 구조
+
+체크포인트: `models/fashion_harmony_final.pt`. 로더: `load_harmony_model()` (`models/fashion_harmony.py`).
+
+```mermaid
+flowchart TB
+  subgraph per_slot [슬롯당 N=4 고정]
+    IMG["224×224 RGB<br/>ImageNet normalize"]
+    BB["FashionBackbone<br/>timm efficientnet_b3"]
+    AH["AttributeHeads<br/>category·material·pattern·style logits"]
+    SM["softmax → 벡터 연결 (40차원)"]
+    PR["attr_proj → embed_dim"]
+    CAT["concat(백본 임베딩, attr_emb)<br/>→ 슬롯당 1024차원"]
+  end
+  IMG --> BB --> AH
+  AH --> SM --> PR --> CAT
+  CAT --> ST["SetTransformer<br/>CLS + 4토큰, padding mask"]
+  ST --> SIG["score_head + Sigmoid<br/>→ (0,1)"]
+```
+
+- `forward(outfit_imgs, mask)`: 배치 `B`, 슬롯 `N=4`. 패딩 슬롯은 제로 텐서로 채우고 `mask`로 무시한다.  
+- **서비스 코드 주의**: `analyze_outfit`는 입력 리스트 전체에 대해 CLIP 패널을 만들지만, **위 모델에는 `torch.stack(tensors[:4])`만 넣는다**. 즉 **조화 점수는 최대 4장**이고, `predict-harmony`는 요청에서 이미지를 최대 10장까지 모은 뒤 **각 장마다 MTL**을 돌릴 수 있어, 5번째 이후 이미지는 조화 모델 점수에는 반영되지 않는다.
+
+---
+
+### `analyze_outfit(images)` 처리 순서
+
+`main.py`의 공통 진입점. 웹캠·홈 조화 API 모두 여기로 수렴한다.
+
+```mermaid
+flowchart TD
+  A[PIL Image 리스트] --> B[각 이미지 224 resize + normalize]
+  B --> C[4슬롯 텐서 + mask 구성]
+  C --> D[FashionHarmonyModel 추론]
+  D --> E["score × 100 → harmony_score"]
+  A --> F[이미지들 가로로 224px씩 이어붙임<br/>outfit_img]
+  F --> G{CLIP 사용 가능?}
+  G -->|예| H[8쌍 영어 프롬프트 vs 패널<br/>sigmoid 임계값 ~0.45]
+  H --> I[최대 4줄 한국어 피드백]
+  G -->|아니오| J[clip_feedback = 빈 배열]
+  E --> K[점수 구간별 기본 문장 1줄]
+  K --> L[reasons = 기본 + CLIP]
+  I --> L
+  J --> L
+  L --> M["dict: harmony_score, reasons"]
+```
+
+**기본 `reasons` 문장**(총점 구간): ≥80 / ≥60 / ≥40 / 그 미만 각각 한 줄.  
+**CLIP 피드백**: 색·패턴·스타일·재질 네 축에 대해 긍정·부정 영어 설명 쌍을 두고, 승자 쪽 한국어 라벨을 고른다(`generate_clip_feedback`).
+
+---
+
+### `POST /api/predict-harmony`
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant API as FastAPI
+  participant LO as load_image_from_url
+  participant AO as analyze_outfit
+  participant MTL as classify_attributes
+
+  C->>API: JSON beforeItems + afterItems
+  API->>LO: 각 item.imageUrl (data URL 등)
+  LO-->>API: PIL 리스트 (최대 10장)
+  API->>AO: all_imgs
+  AO-->>API: harmony_score, reasons
+  loop 각 이미지
+    API->>MTL: classify_attributes
+    MTL-->>API: texture/pattern/style 버킷 등
+  end
+  API-->>C: HarmonyResponse score_* , reasons, debug
+```
+
+- `beforeItems`가 비었으면 중립 점수(50대)와 고정 메시지를 반환한다.  
+- 응답의 `score_color`·`score_texture`·`score_pattern`·`score_style`는 현재 구현에서 **`score_total`의 0.95배**로 채워진다(API 스키마 호환용). 실제 세부 축은 MTL·CLIP이 아니라 이 스칼라 파생값임을 코드 읽을 때 구분하면 된다.
+
+---
+
+### `POST /api/webcam-harmony` · `POST /api/detect-clothing`
+
+```mermaid
+flowchart TD
+  UP[multipart 이미지 1장] --> YO[YOLOv8n classes=0 person]
+  YO --> CONF{conf ≥ 0.5 ?}
+  CONF -->|예| BOX[첫 번째 사람 박스만 사용]
+  BOX --> TOP["상의 크롭 y: 0.20~0.55 × 키"]
+  BOX --> BOT["하의 크롭 y: 0.50~0.90 × 키"]
+  TOP --> CROPS[cropped_imgs = 상의, 하의]
+  BOT --> CROPS
+  CONF -->|검출 없음| WHOLE[cropped_imgs = 원본 1장, crops 라벨 전체]
+  CROPS --> AO2[analyze_outfit]
+  WHOLE --> AO2
+  AO2 --> OUT[harmony_score, reasons]
+  CROPS --> MTL2[크롭별 MTL]
+  MTL2 --> RES[items + crop_images base64 + detections]
+  OUT --> RES
+```
+
+- `detect-clothing`은 **조화 점수를 계산하지 않는다**. YOLO 박스·상·하 영역 메타와, 박스가 그려진 미리보기 PNG(`image` data URL)만 반환한다. 조화가 필요하면 같은 프레임으로 `webcam-harmony`를 호출하거나, 크롭을 아이템으로 올린 뒤 `predict-harmony`를 쓰면 된다.  
+- `webcam-harmony`는 한 번에 `analyze_outfit`·크롭별 MTL·크롭 PNG data URL·`detections`까지 묶어 반환한다.
+
+---
+
+### CLIP의 두 가지 역할
+
+| 용도 | 호출 경로 | 입력 | 출력 |
+|------|-----------|------|------|
+| **카테고리** | `classify_category` ← `POST /api/classify-clothing-type` | 단일 의류 이미지 | 상의/하의/모자/신발/악세서리 + softmax, 실패 시 `model_type: fallback` |
+| **코디 피드백** | `generate_clip_feedback` ← `analyze_outfit` | 가로로 이은 코디 패널(슬롯 수 × 224 너비) | 최대 4개 한국어 짧은 문장 |
+
+모델 가중치: `openai/clip-vit-base-patch32` (`transformers` 지연 로딩).
+
+---
+
+### MTL·라벨·표시 버킷
+
+- `FashionMTLModel`: 재질 97·패턴 70·스타일 8 클래스 logits.  
+- `label_maps.py`의 `MAT_ID2NAME`, `PAT_ID2NAME`으로 원시 이름 복원 후, `main.py`의 `map_material`·`map_pattern`으로 **표시용 버킷**(예: Denim, Solid)으로 줄인다.  
+- 스타일 이름은 코드 내 고정 리스트(캐주얼, 미니멀 등)로 매핑한다.
+
+---
+
+### 기타 API (개선 파이프라인과 함께 쓰는 주변 기능)
+
+- `POST /api/remove-background` — rembg  
+- `POST /api/extract-colors` — RGB 픽셀 KMeans(k=5)  
+- `POST /api/save-history` · `GET /api/get-history` · `DELETE /api/delete-history/{id}` — 서버 메모리 히스토리(프로세스 재시작 시 초기화)
+
+---
+
+### 프론트엔드 상태 (참고)
+
+| 키 | 용도 |
+|----|------|
+| `currentItems` | 캔버스에 올린 아이템 |
+| `huwari_harmony_cache` | 동일 구성 재요청 완화 |
+| `huwari_input_mode` | 업로드 vs 웹캠 |
+| `loadHistoryItems` | 히스토리 불러오기 직후 1회 복원 |
+
+---
+
+### 한 줄 요약
+
+**개선 파이프라인**은 후보 랭킹이 아니라 **EfficientNet-B3 백본 + 슬롯별 속성 softmax + Set Transformer**로 세트 조화를 직접 예측하고, **별도 MTL**로 아이템 속성을 채우며, **CLIP**으로 카테고리·코디 패널 설명을 보강하는 구조다.
+
