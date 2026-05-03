@@ -332,18 +332,18 @@ function Home() {
     }
   }, [beforeItems, afterItems])
 
-  // 캐릭터 이미지 경로 결정
-  const getCharacterImage = () => {
+  // 조화 상태 영역 전용: 점수 구간별 표정 (0~39 화남, 40~69 보통, 70~100 행복). 피드백 줄 기니는 항상 normal.
+  const getHarmonyStateCharacterImage = () => {
     if (!harmonyScore) return '/assets/normal_gini.svg'
-    
+
     const score = harmonyScore.score_total
-    if (score < 30) {
-      return '/assets/bad_gini.svg'  // angry
-    } else if (score < 60) {
-      return '/assets/normal_gini.svg'  // normal
-    } else {
-      return '/assets/good_gini.svg'  // happy
+    if (score < 40) {
+      return '/assets/angry_gini.svg'
     }
+    if (score < 70) {
+      return '/assets/normal_gini.svg'
+    }
+    return '/assets/happy_gini.svg'
   }
 
   const stopWebcam = () => {
@@ -751,7 +751,7 @@ function Home() {
                         <div key={row.id} className="flex items-start gap-4">
                           <div className="flex-shrink-0 pt-0.5">
                             <img
-                              src={getCharacterImage()}
+                              src="/assets/normal_gini.svg"
                               alt="Gini"
                               className="w-[72px] h-[72px]"
                               onError={(e) => {
@@ -811,7 +811,7 @@ function Home() {
                   <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
                     <div className="w-28 h-28 bg-secondary flex items-center justify-center rounded-full mb-2">
                       <img
-                        src={getCharacterImage()}
+                        src={getHarmonyStateCharacterImage()}
                         alt="Gini"
                         className="w-20 h-20"
                         onError={(e) => {
