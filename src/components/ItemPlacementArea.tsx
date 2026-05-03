@@ -58,6 +58,7 @@ const ItemPlacementArea = ({
 
   const prevInitialItemsKeyRef = useRef<string>(initialItemsKey)
   const isInitialMountRef = useRef(true)
+  const prevPlacedJsonRef = useRef<string | null>(null)
 
   // initialItems가 변경되면 placedItems 업데이트
   useEffect(() => {
@@ -74,17 +75,14 @@ const ItemPlacementArea = ({
     }
   }, [initialItems, initialItemsKey])
 
-  // placedItems 변경 시 상위 컴포넌트에 알림 (initialItems와 다를 때만)
+  // placedItems 변경 시 상위에 동기화 (texture/pattern/style 등 id 외 필드만 바뀐 경우 포함)
   useEffect(() => {
-    if (onItemsChange && !isInitialMountRef.current) {
-      const placedKey = placedItems.length > 0 ? JSON.stringify(placedItems.map(item => item.id).sort()) : 'empty'
-      
-      // placedItems가 initialItems와 다를 때만 알림 (사용자가 직접 변경한 경우)
-      if (placedKey !== initialItemsKey) {
-        onItemsChange(placedItems)
-      }
-    }
-  }, [placedItems, onItemsChange, initialItemsKey])
+    if (!onItemsChange) return
+    const json = JSON.stringify(placedItems)
+    if (prevPlacedJsonRef.current === json) return
+    prevPlacedJsonRef.current = json
+    onItemsChange(placedItems)
+  }, [placedItems, onItemsChange])
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
   const [resizingItem, setResizingItem] = useState<string | null>(null)
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0 })
@@ -103,19 +101,21 @@ const ItemPlacementArea = ({
     setProcessingCount(prev => prev + 1)
 
     try {
-      // FormData 생성
-      const formData = new FormData()
-      formData.append('file', file)
+      // 같은 FormData를 두 fetch에 동시에 넘기면 브라우저마다 body가 비거나 깨질 수 있어 각각 생성한다.
+      const classifyFormData = new FormData()
+      classifyFormData.append('file', file)
+      const bgFormData = new FormData()
+      bgFormData.append('file', file)
 
       // 의류 타입 분류와 배경 제거를 병렬로 실행 (성능 최적화)
       const [classifyResponse, bgResponse] = await Promise.all([
         fetch('/api/classify-clothing-type', {
           method: 'POST',
-          body: formData,
+          body: classifyFormData,
         }),
         fetch('/api/remove-background', {
           method: 'POST',
-          body: formData,
+          body: bgFormData,
         })
       ])
 

@@ -50,6 +50,9 @@ function readHarmonyCacheForItems(items: PlacedItem[]): HarmonyScore | null {
   return null
 }
 
+/** 피드백 패널에 기본으로 보이는 기니피그(행) 개수 */
+const FEEDBACK_MIN_ROWS = 4
+
 function Home() {
   const location = useLocation()
   const [inputMode, setInputMode] = useState<'upload' | 'webcam'>(() => {
@@ -227,6 +230,29 @@ function Home() {
     return sortedColors
   }, [beforeItems])
 
+  const feedbackRows = useMemo(() => {
+    if (isLoadingHarmony) {
+      return Array.from({ length: FEEDBACK_MIN_ROWS }, (_, i) => ({
+        id: `loading-${i}`,
+        text: i === 0 ? '코디를 분석하는 중입니다…' : null,
+      }))
+    }
+    const reasons = harmonyScore?.reasons ?? []
+    if (reasons.length === 0) {
+      return Array.from({ length: FEEDBACK_MIN_ROWS }, (_, i) => ({
+        id: `idle-${i}`,
+        text:
+          i === 0
+            ? '코디 이미지를 올리면 피드백이 여기에 표시됩니다.'
+            : null,
+      }))
+    }
+    const n = Math.max(FEEDBACK_MIN_ROWS, reasons.length)
+    return Array.from({ length: n }, (_, i) => ({
+      id: `reason-${i}`,
+      text: reasons[i] ?? null,
+    }))
+  }, [isLoadingHarmony, harmonyScore?.reasons])
 
   // 조화 점수 계산 API 호출 (debounce)
   useEffect(() => {
@@ -527,7 +553,7 @@ function Home() {
               <div className="flex-1 min-h-0">
                 {inputMode === 'upload' ? (
                   <ItemPlacementArea
-                    key={beforeItems.length > 0 ? `items-${beforeItems.map(i => i.id).join('-')}` : 'empty'}
+                    key="before-upload"
                     buttonText="이미지 업로드"
                     buttonIcon="upload"
                     instructionText="이미지를 업로드하면<br />자동으로 배치됩니다"
@@ -589,7 +615,7 @@ function Home() {
               </div>
             </div>
 
-            {/* 분석 결과 - 상세 분석과 같은 높이에서 시작 */}
+            {/* 분석 결과 */}
             <div className="bg-[#FAFAF8] p-4 border-t border-secondary overflow-y-auto scrollbar-thin h-[260px]">
               <h4 className="text-xs font-regular text-secondary mb-4 uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">분석 결과</h4>
               <div className="grid grid-cols-2 gap-3">
@@ -678,15 +704,15 @@ function Home() {
           </div>
 
           {/* 오른쪽: 조화 분석 결과 */}
-          <div className="bg-[#FAFAF8] flex flex-col">
-            <div className="p-6 flex items-center justify-between border-b border-secondary translate-y-[1.375px]">
+          <div className="bg-[#FAFAF8] flex flex-col min-h-0">
+            <div className="p-6 flex items-center justify-between border-b border-secondary translate-y-[1.375px] shrink-0">
               <h3 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">코디 평가</h3>
             </div>
             
             {/* 조화 점수, 캐릭터, 분석 이유 - flex-1 영역 */}
             <div className="flex-1 flex flex-col min-h-0">
               {/* 조화 점수와 캐릭터 */}
-              <div className="p-4 border-b border-secondary">
+              <div className="p-4 border-b border-secondary shrink-0">
                 <div className="grid grid-cols-2 gap-3">
                   {/* 조화 점수 */}
                   <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
@@ -720,112 +746,57 @@ function Home() {
                 </div>
               </div>
 
-              {/* 분석 이유 - 기니피그 말풍선 */}
-              <div className="bg-[#FAFAF8] p-4 min-h-[120px]">
-                <div className="space-y-3">
-                  {[0, 1, 2, 3].map((idx) => {
-                    const reason = harmonyScore?.reasons?.[idx]
-                    return (
-                      <div key={idx} className="flex items-center gap-4">
-                        {/* 기니피그 캐릭터 - 항상 표시 */}
-                        <div className="flex-shrink-0">
-                          <img 
-                            src={getCharacterImage()} 
-                            alt="Gini" 
-                            className="w-16 h-16"
-                            onError={(e) => {
-                              const target = e.target as HTMLImageElement
-                              target.src = '/assets/normal_gini.svg'
-                            }}
-                          />
-                        </div>
-                        {/* 말풍선 - 이유가 있을 때만 표시 */}
-                        {reason && (
-                          <div className="flex-1 relative">
-                            <div className="bg-[#FAFAF8] border border-secondary px-4 py-3 rounded-lg relative">
-                              <p className="text-xs text-secondary leading-relaxed">
-                                {reason}
-                              </p>
-                              {/* 말풍선 꼬리 */}
-                              <div className="absolute left-0 top-4 -ml-2">
-                                <div className="w-3 h-3 bg-[#FAFAF8] border-l border-b border-secondary transform rotate-45"></div>
-                              </div>
+              {/* 피드백 */}
+              <div className="flex-1 min-h-0 flex flex-col bg-[#FAFAF8]">
+                <div className="shrink-0 px-4 pt-4 pb-2">
+                  <h4 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">
+                    피드백
+                  </h4>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 pb-5">
+                  <div className="space-y-4">
+                    {feedbackRows.map((row) => {
+                      const hasText = row.text != null && row.text !== ''
+                      return (
+                        <div key={row.id} className="flex items-start gap-4">
+                          <div className="flex-shrink-0 pt-0.5">
+                            <img
+                              src={getCharacterImage()}
+                              alt="Gini"
+                              className="w-[72px] h-[72px]"
+                              onError={(e) => {
+                                const target = e.target as HTMLImageElement
+                                target.src = '/assets/normal_gini.svg'
+                              }}
+                            />
+                          </div>
+                          <div className="flex-1 min-w-0 relative pt-1">
+                            <div
+                              className={`rounded-xl relative px-4 py-3.5 ${
+                                hasText
+                                  ? 'bg-[#FAFAF8] border border-secondary shadow-sm'
+                                  : 'border border-dashed border-secondary/30 bg-[#FAFAF8]/80'
+                              }`}
+                            >
+                              {hasText ? (
+                                <p className="text-sm text-secondary leading-relaxed">
+                                  {row.text}
+                                </p>
+                              ) : (
+                                <p className="text-sm text-secondary/25 leading-relaxed min-h-[1.375rem]">
+                                  &nbsp;
+                                </p>
+                              )}
+                              {hasText && (
+                                <div className="absolute left-0 top-5 -ml-2">
+                                  <div className="w-3 h-3 bg-[#FAFAF8] border-l border-b border-secondary transform rotate-45" />
+                                </div>
+                              )}
                             </div>
                           </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* 상세 분석 - Before의 분석 결과와 같은 높이에서 시작 */}
-            <div className="bg-[#FAFAF8] p-4 border-t border-secondary overflow-y-auto scrollbar-thin h-[260px]">
-              <h4 className="text-xs font-regular text-secondary mb-3 uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">상세 분석</h4>
-              <div className="space-y-1.5">
-                <div className="bg-[#FAFAF8] border border-secondary rounded-lg p-3 flex justify-between items-center hover:bg-secondary/5 transition-colors">
-                  <span className="text-xs text-secondary uppercase tracking-wider">색상 조화</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-20 h-2 bg-secondary/20 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-secondary transition-all duration-300"
-                        style={{ 
-                          width: `${isLoadingHarmony ? 0 : (harmonyScore ? harmonyScore.score_color : 0)}%` 
-                        }}
-                      />
-                    </div>
-                    <span className="text-xs font-medium text-secondary w-8 text-right">
-                      {isLoadingHarmony ? '-' : (harmonyScore ? Math.round(harmonyScore.score_color) : '-')}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-[#FAFAF8] border border-secondary rounded-lg p-3 flex justify-between items-center hover:bg-secondary/5 transition-colors">
-                  <span className="text-xs text-secondary uppercase tracking-wider">재질 조화</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-20 h-2 bg-secondary/20 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-secondary transition-all duration-300"
-                        style={{ 
-                          width: `${isLoadingHarmony ? 0 : (harmonyScore ? harmonyScore.score_texture : 0)}%` 
-                        }}
-                      />
-                    </div>
-                    <span className="text-xs font-medium text-secondary w-8 text-right">
-                      {isLoadingHarmony ? '-' : (harmonyScore ? Math.round(harmonyScore.score_texture) : '-')}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-[#FAFAF8] border border-secondary rounded-lg p-3 flex justify-between items-center hover:bg-secondary/5 transition-colors">
-                  <span className="text-xs text-secondary uppercase tracking-wider">패턴 조화</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-20 h-2 bg-secondary/20 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-secondary transition-all duration-300"
-                        style={{ 
-                          width: `${isLoadingHarmony ? 0 : (harmonyScore ? harmonyScore.score_pattern : 0)}%` 
-                        }}
-                      />
-                    </div>
-                    <span className="text-xs font-medium text-secondary w-8 text-right">
-                      {isLoadingHarmony ? '-' : (harmonyScore ? Math.round(harmonyScore.score_pattern) : '-')}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-[#FAFAF8] border border-secondary rounded-lg p-3 flex justify-between items-center hover:bg-secondary/5 transition-colors">
-                  <span className="text-xs text-secondary uppercase tracking-wider">스타일 조화</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-20 h-2 bg-secondary/20 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-secondary transition-all duration-300"
-                        style={{ 
-                          width: `${isLoadingHarmony ? 0 : (harmonyScore ? harmonyScore.score_style : 0)}%` 
-                        }}
-                      />
-                    </div>
-                    <span className="text-xs font-medium text-secondary w-8 text-right">
-                      {isLoadingHarmony ? '-' : (harmonyScore ? Math.round(harmonyScore.score_style) : '-')}
-                    </span>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               </div>
