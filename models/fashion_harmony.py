@@ -12,17 +12,16 @@ import timm
 
 
 # ===== 클래스 목록 =====
+# 재학습 체크포인트(fashion_harmony_retrained.pt)와 차원 일치: 재질 8 · 패턴 9 · 스타일 10 · 카테고리 5 → attr 32
 CATEGORY_CLASSES = ["상의", "하의", "신발", "모자", "악세서리"]
 
 MATERIAL_CLASSES = [
-    "데님", "니트", "실크", "가죽", "울",
-    "면", "패딩", "벨벳", "메시", "쉬폰", "레이스", "기타"
+    "데님", "니트", "실크", "가죽", "면", "패딩", "울", "기타",
 ]
 
 PATTERN_CLASSES = [
     "무지", "스트라이프", "체크", "도트", "플로럴",
-    "그래픽", "호피·뱀피", "페이즐리", "카무플라쥬",
-    "타이다이", "그라데이션", "아가일", "기타"
+    "그래픽", "호피·뱀피", "카무플라쥬", "기타",
 ]
 
 STYLE_CLASSES = [
@@ -71,9 +70,9 @@ class AttributeHeads(nn.Module):
             )
 
         self.category_head = _head(len(CATEGORY_CLASSES))  # 5
-        self.material_head = _head(len(MATERIAL_CLASSES))  # 12
-        self.pattern_head  = _head(len(PATTERN_CLASSES))   # 13
-        self.style_head    = _head(len(STYLE_CLASSES))     # 10
+        self.material_head = _head(len(MATERIAL_CLASSES))  # 8
+        self.pattern_head  = _head(len(PATTERN_CLASSES))   # 9
+        self.style_head    = _head(len(STYLE_CLASSES))   # 10
 
     def forward(self, emb):
         return {
@@ -134,7 +133,7 @@ class FashionHarmonyModel(nn.Module):
         self.backbone        = FashionBackbone(embed_dim)
         self.attr_heads      = AttributeHeads(embed_dim)
 
-        # 속성 벡터 차원: 5+12+13+10 = 40
+        # 속성 벡터 차원: 5+8+9+10 = 32 (재학습 체크포인트와 동일)
         attr_dim             = (len(CATEGORY_CLASSES) + len(MATERIAL_CLASSES) +
                                 len(PATTERN_CLASSES)  + len(STYLE_CLASSES))
         self.attr_proj       = nn.Linear(attr_dim, embed_dim)

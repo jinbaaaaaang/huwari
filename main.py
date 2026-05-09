@@ -17,16 +17,14 @@ from pathlib import Path
 import re
 import time
 
-# ===== 새 조화도 모델 =====
-from models.fashion_harmony import FashionHarmonyModel, load_harmony_model
-
-# ===== 기존 MTL 모델 =====
-try:
-    from models.fashion_mtl import FashionMTLModel
-    HAS_MTL_MODEL = True
-except ImportError:
-    HAS_MTL_MODEL = False
-    FashionMTLModel = None
+# ===== 통합 조화도 모델 (속성 + 조화 점수) =====
+from models.fashion_harmony import (
+    load_harmony_model,
+    CATEGORY_CLASSES,
+    MATERIAL_CLASSES,
+    PATTERN_CLASSES,
+    STYLE_CLASSES,
+)
 
 # ===== transformers (CLIP) =====
 try:
@@ -37,25 +35,13 @@ except ImportError:
     CLIPProcessor = None
     CLIPModel = None
 
-# ===== label_maps =====
-try:
-    from label_maps import MAT_ID2NAME, PAT_ID2NAME
-    print(f"label_maps 로드 성공: 재질 {len(MAT_ID2NAME)}개, 패턴 {len(PAT_ID2NAME)}개")
-except ImportError:
-    MAT_ID2NAME = {i: f"material_{i}" for i in range(97)}
-    PAT_ID2NAME = {i: f"pattern_{i}" for i in range(70)}
-    print("경고: label_maps.py 없음, 임시 딕셔너리 사용")
-
 app = FastAPI(title="HUWARI API")
 
 # ===== 경로 설정 =====
-HARMONY_CKPT = Path(__file__).resolve().parent / "models" / "fashion_harmony_final.pt"
-MTL_CKPT     = Path(__file__).resolve().parent / "models" / "fashion_mtl_model.pt"
+HARMONY_CKPT = Path(__file__).resolve().parent / "models" / "fashion_harmony_retrained.pt"
 
 # ===== 전역 변수 =====
 _harmony_model  = None
-_mtl_model      = None
-_mtl_transform  = None
 _yolo_model     = None
 _clip_model     = None
 _clip_processor = None
@@ -69,17 +55,6 @@ IMG_TRANSFORM = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406],
                           [0.229, 0.224, 0.225])
 ])
-
-# ===== 표시용 클래스 =====
-DISPLAY_MATERIAL_CLASSES = [
-    'Woven (Plain)', 'Velvet/Corduroy', 'Knit/Jersey', 'Denim',
-    'Silk', 'Leather', 'Wool/Cashmere', 'Padded/Fleece/Fur', 'Synthetic/Other'
-]
-DISPLAY_PATTERN_CLASSES = [
-    'Solid', 'Stripe', 'Check', 'Dot', 'Floral',
-    'Paisley', 'Graphic/Lettering', 'Leopard/Snake', 'Camouflage', 'Other'
-]
-
 
 def get_device():
     global _device
@@ -99,35 +74,6 @@ def get_harmony_model():
         _harmony_model = load_harmony_model(str(HARMONY_CKPT), get_device())
         print("조화도 모델 로드 완료")
     return _harmony_model
-
-
-def get_mtl_model():
-    """기존 MTL 모델 지연 로딩"""
-    global _mtl_model, _mtl_transform
-    if _mtl_model is None and HAS_MTL_MODEL:
-        try:
-            _mtl_model = FashionMTLModel(
-                num_texture_classes=97,
-                num_pattern_classes=70,
-                num_style_classes=8,
-                dropout_rate=0.3
-            )
-            checkpoint = torch.load(str(MTL_CKPT), map_location='cpu')
-            state_dict = (checkpoint['model_state_dict']
-                          if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint
-                          else checkpoint)
-            _mtl_model.load_state_dict(state_dict, strict=True)
-            _mtl_model.eval()
-            _mtl_transform = transforms.Compose([
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-            ])
-            print("MTL 모델 로드 완료")
-        except Exception as e:
-            print(f"MTL 모델 로드 실패: {e}")
-            _mtl_model = None
-    return _mtl_model, _mtl_transform
 
 
 def get_yolo_model():
@@ -159,52 +105,6 @@ def pil_to_tensor(image: Image.Image) -> torch.Tensor:
     return IMG_TRANSFORM(image.convert("RGB"))
 
 
-def map_material(material_name: str) -> str:
-    """재질 이름 → 표시용 버킷"""
-    n = material_name.lower()
-    if any(x in n for x in ['데님', 'denim', 'jean']):
-        return 'Denim'
-    if any(x in n for x in ['니트', 'knit', 'sweater', 'jersey', '저지']):
-        return 'Knit/Jersey'
-    if any(x in n for x in ['실크', 'silk', '시폰', 'chiffon', 'satin']):
-        return 'Silk'
-    if any(x in n for x in ['가죽', 'leather', '스웨이드', 'suede']):
-        return 'Leather'
-    if any(x in n for x in ['울', 'wool', '캐시미어', 'cashmere']):
-        return 'Wool/Cashmere'
-    if any(x in n for x in ['패딩', 'padded', '플리스', 'fleece', '퍼', 'fur', '무스탕']):
-        return 'Padded/Fleece/Fur'
-    if any(x in n for x in ['벨벳', 'velvet', '코듀로이', 'corduroy']):
-        return 'Velvet/Corduroy'
-    if any(x in n for x in ['우븐', 'woven', '린넨', 'linen', '자카드', 'jacquard', '트위드', 'tweed']):
-        return 'Woven (Plain)'
-    return 'Synthetic/Other'
-
-
-def map_pattern(pattern_name: str) -> str:
-    """패턴 이름 → 표시용 버킷"""
-    n = pattern_name.lower()
-    if '무지' in n and '그래픽' not in n and '레터링' not in n:
-        return 'Solid'
-    if any(x in n for x in ['스트라이프', 'stripe']):
-        return 'Stripe'
-    if any(x in n for x in ['체크', 'check', '깅엄', 'gingham', '하운즈', 'houndstooth']):
-        return 'Check'
-    if any(x in n for x in ['도트', 'dot', 'polka']):
-        return 'Dot'
-    if any(x in n for x in ['플로럴', 'floral', 'flower']):
-        return 'Floral'
-    if any(x in n for x in ['페이즐리', 'paisley']):
-        return 'Paisley'
-    if any(x in n for x in ['그래픽', 'graphic', '레터링', 'lettering']):
-        return 'Graphic/Lettering'
-    if any(x in n for x in ['호피', 'leopard', '뱀피', 'snake', 'animal']):
-        return 'Leopard/Snake'
-    if any(x in n for x in ['카무플라쥬', 'camouflage', 'camo']):
-        return 'Camouflage'
-    return 'Other'
-
-
 def analyze_outfit(images: List[Image.Image]) -> Dict:
     """
     이미지 리스트 → 조화 점수 계산 (새 모델)
@@ -213,18 +113,21 @@ def analyze_outfit(images: List[Image.Image]) -> Dict:
     model  = get_harmony_model()
     device = get_device()
 
+    # 최대 4개 아이템만 사용 (SetTransformer 입력 길이 고정)
+    images = images[:4]
+
     tensors = [pil_to_tensor(img) for img in images]
     while len(tensors) < 4:
         tensors.append(torch.zeros(3, 224, 224))
 
-    imgs_tensor = torch.stack(tensors[:4]).unsqueeze(0).to(device)
+    imgs_tensor = torch.stack(tensors).unsqueeze(0).to(device)
     mask        = torch.zeros(1, 4).to(device)
     mask[0, :len(images)] = 1.0
 
     with torch.no_grad():
-        score = model(imgs_tensor, mask).item()
+        raw = model(imgs_tensor, mask).item()  # (0,1) — score_head 마지막 Sigmoid 출력
 
-    score_0to100 = round(score * 100, 1)
+    score_0to100 = round(raw * 100, 1)
 
     # CLIP 피드백 생성
     clip_feedback = generate_clip_feedback(images)
@@ -245,75 +148,60 @@ def analyze_outfit(images: List[Image.Image]) -> Dict:
 
     return {
         "harmony_score": score_0to100,
-        "reasons":       reasons,
+        "harmony_sigmoid_raw": raw,
+        "reasons": reasons,
     }
 
 
 def classify_attributes(image: Image.Image) -> Dict:
     """
-    단일 이미지 → 재질/패턴/스타일 분류 (기존 MTL 모델)
+    단일 이미지 → 재질/패턴/스타일/카테고리 분류 (FashionHarmonyModel.get_attributes)
     """
-    model, transform = get_mtl_model()
-    if model is None or transform is None:
-        return {"texture": None, "pattern": None, "style": None}
+    empty = {"texture": None, "pattern": None, "style": None, "category": None}
+    if not HARMONY_CKPT.exists():
+        return empty
 
+    model = get_harmony_model()
     device = get_device()
-    tensor = transform(image.convert("RGB")).unsqueeze(0).to(device)
-    model  = model.to(device)
-
-    style_classes = ['캐주얼', '고프코어', '미니멀', '긱시크', '로맨틱', '빈티지', '포멀', 'Y2K']
+    tensor = pil_to_tensor(image.convert("RGB")).unsqueeze(0).to(device)
+    model.eval()
 
     with torch.no_grad():
-        style_logits, material_logits, pattern_logits = model(tensor)
+        out = model.get_attributes(tensor)
 
-    mat_id   = material_logits.argmax(1).item()
-    pat_id   = pattern_logits.argmax(1).item()
-    style_id = style_logits.argmax(1).item()
+    mat_kor = out["material"]
+    pat_kor = out["pattern"]
+    style_name = out["style"]
+    cat_name = out["category"]
+    probs = out["probs"]
 
-    mat_name  = MAT_ID2NAME.get(mat_id, f"material_{mat_id}")
-    pat_name  = PAT_ID2NAME.get(pat_id, f"pattern_{pat_id}")
-    mat_show  = map_material(mat_name)
-    pat_show  = map_pattern(pat_name)
-    style_name = style_classes[style_id]
+    mat_probs = {MATERIAL_CLASSES[i]: float(probs["material"][i]) for i in range(len(MATERIAL_CLASSES))}
+    pat_probs = {PATTERN_CLASSES[i]: float(probs["pattern"][i]) for i in range(len(PATTERN_CLASSES))}
 
-    style_probs    = torch.nn.functional.softmax(style_logits[0], dim=0)
-    material_probs = torch.nn.functional.softmax(material_logits[0], dim=0)
-    pattern_probs  = torch.nn.functional.softmax(pattern_logits[0], dim=0)
-
-    # 표시용 확률 집계
-    mat_show_probs = {}
-    for display_mat in DISPLAY_MATERIAL_CLASSES:
-        total = sum(float(material_probs[mid].item())
-                    for mid, mname in MAT_ID2NAME.items()
-                    if map_material(mname) == display_mat)
-        mat_show_probs[display_mat] = total
-
-    pat_show_probs = {}
-    for display_pat in DISPLAY_PATTERN_CLASSES:
-        total = sum(float(pattern_probs[pid].item())
-                    for pid, pname in PAT_ID2NAME.items()
-                    if map_pattern(pname) == display_pat)
-        pat_show_probs[display_pat] = total
+    style_probs = {STYLE_CLASSES[i]: float(probs["style"][i]) for i in range(len(STYLE_CLASSES))}
+    cat_probs = {CATEGORY_CLASSES[i]: float(probs["category"][i]) for i in range(len(CATEGORY_CLASSES))}
 
     return {
         "texture": {
-            "class":         mat_show,
-            "confidence":    float(mat_show_probs.get(mat_show, 0.0)),
-            "all_probs":     mat_show_probs,
-            "original_name": mat_name,
+            "class": mat_kor,
+            "confidence": float(mat_probs.get(mat_kor, 0.0)),
+            "all_probs": mat_probs,
         },
         "pattern": {
-            "class":         pat_show,
-            "confidence":    float(pat_show_probs.get(pat_show, 0.0)),
-            "all_probs":     pat_show_probs,
-            "original_name": pat_name,
+            "class": pat_kor,
+            "confidence": float(pat_probs.get(pat_kor, 0.0)),
+            "all_probs": pat_probs,
         },
         "style": {
-            "class":      style_name,
-            "confidence": float(style_probs[style_id].item()),
-            "all_probs":  {style_classes[i]: float(style_probs[i].item())
-                           for i in range(len(style_classes))}
-        }
+            "class": style_name,
+            "confidence": float(style_probs.get(style_name, 0.0)),
+            "all_probs": style_probs,
+        },
+        "category": {
+            "class": cat_name,
+            "confidence": float(cat_probs.get(cat_name, 0.0)),
+            "all_probs": cat_probs,
+        },
     }
 
 
@@ -433,9 +321,15 @@ def classify_category(image: Image.Image) -> Dict:
 
 
 # ===== CORS =====
+# allow_credentials=True 와 allow_origins=["*"] 는 브라우저에서 같이 쓰면 무효 처리될 수 있어 명시 origin 사용
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -584,7 +478,7 @@ def load_image_from_url(image_url: str) -> Optional[Image.Image]:
 # ===== 속성 분류 API =====
 @app.post("/api/classify-fashion-attributes")
 async def classify_fashion_attributes(file: UploadFile = File(...)):
-    """재질/패턴/스타일 분류 — 기존 FashionMTLModel 사용"""
+    """재질/패턴/스타일/카테고리 분류 — FashionHarmonyModel (통합 모델)"""
     try:
         image_data = await file.read()
         image      = Image.open(io.BytesIO(image_data)).convert("RGB")
@@ -592,7 +486,7 @@ async def classify_fashion_attributes(file: UploadFile = File(...)):
         return {"success": True, **attrs}
     except Exception as e:
         return {"success": False, "error": str(e),
-                "texture": None, "pattern": None, "style": None}
+                "texture": None, "pattern": None, "style": None, "category": None}
 
 
 # ===== 카테고리 분류 API =====
@@ -615,8 +509,8 @@ async def classify_clothing_type(file: UploadFile = File(...)):
 @app.post("/api/predict-harmony", response_model=HarmonyResponse)
 async def predict_harmony(request: HarmonyRequest):
     """
-    조화 점수 — 새 FashionHarmonyModel 사용
-    속성 분류 — 기존 FashionMTLModel 사용
+    조화 점수·속성 — 동일 FashionHarmonyModel (재학습 체크포인트)
+    흐름: 카테고리·재질·패턴·스타일 분류 헤드 + Set Transformer 조화 점수
     """
     try:
         if not request.beforeItems:
@@ -645,11 +539,9 @@ async def predict_harmony(request: HarmonyRequest):
 
         start_time = time.time()
 
-        # 조화 점수 (새 모델)
         result      = analyze_outfit(all_imgs)
         score_total = result["harmony_score"]
 
-        # 각 아이템 속성 (기존 MTL 모델)
         item_attrs = []
         for img in all_imgs:
             attrs = classify_attributes(img)
@@ -665,9 +557,10 @@ async def predict_harmony(request: HarmonyRequest):
             score_style=round(score_total * 0.95, 1),
             reasons=result["reasons"],
             debug={
-                "elapsed":    elapsed,
+                "elapsed": elapsed,
                 "item_attrs": item_attrs,
-                "img_count":  len(all_imgs),
+                "img_count": len(all_imgs),
+                "harmony_sigmoid_raw": result.get("harmony_sigmoid_raw"),
             }
         )
 
@@ -727,10 +620,8 @@ async def webcam_harmony(file: UploadFile = File(...)):
             cropped_imgs = [image]
             detections   = [{"person": None, "crops": ["전체"]}]
 
-        # 조화 점수 (새 모델)
         result = analyze_outfit(cropped_imgs)
 
-        # 각 아이템 속성 (기존 MTL 모델)
         item_attrs = []
         for img in cropped_imgs:
             attrs = classify_attributes(img)
@@ -747,12 +638,13 @@ async def webcam_harmony(file: UploadFile = File(...)):
             )
 
         return {
-            "success":       True,
+            "success": True,
             "harmony_score": result["harmony_score"],
-            "items":         item_attrs,
-            "reasons":       result["reasons"],
-            "detections":    detections,
-            "crop_images":   crop_b64_list,
+            "harmony_sigmoid_raw": result.get("harmony_sigmoid_raw"),
+            "items": item_attrs,
+            "reasons": result["reasons"],
+            "detections": detections,
+            "crop_images": crop_b64_list,
         }
 
     except Exception as e:

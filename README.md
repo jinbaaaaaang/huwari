@@ -37,6 +37,329 @@ HUWARI는 "지금 가진 옷 조합이 잘 어울리는지"를 빠르게 확인�
 - 색/질감/패턴/스타일 관점의 다각도 피드백 제공
 - 코디 실험(아이템 교체)을 빠르게 반복할 수 있는 인터랙티브 UX 제공
 
+---
+
+<a id="research-journey"></a>
+## HUWARI 연구·개발 스토리 (베이스라인 → 선행연구 → 실험 → 현재 서비스)
+
+먼저 **당시 HUWARI 레거시(모듈 분절) 파이프라인**을 구조·수치로 고정해 **어디가 병목인지**를 밝히고, 그 **문제를 해결할 방향을 찾기 위해 선행연구**를 살펴보았다. 이어서 도출한 **개선 원칙**을 **FashionHarmony·K-Fashion 실험**으로 옮기고, 마지막에 **지금 저장소의 서비스**로 구현한 과정을 한 흐름으로 묶었다.
+
+```mermaid
+flowchart LR
+  S1[1. 베이스라인·정량화] --> S2[2. 한계·개선 원칙]
+  S2 --> S3[3. 선행연구 맥락]
+  S3 --> S4[4. 모델·데이터 실험]
+  S4 --> S5[5. 현재 서비스 구현]
+```
+
+---
+
+<a id="baseline-eval"></a>
+### 1. 베이스라인: 레거시 파이프라인 구조와 측정값
+
+개선 실험에 앞서 **기존 파이프라인을 그대로 두고** 성능을 측정해, 이후 모든 변경의 **기준선(Baseline)** 으로 삼았다.
+
+#### 1.1 모듈 구성(개념)와 엔드포인트
+
+레거시 시스템은 하나의 거대한 순차 파이프라인이라기보다, **요청 목적별로 모델이 갈라지는 API 구조**였다. 조화·속성·의류 타입·전처리가 각각 분리되어 있었고, 이는 곧 **표현 공간이 통합되지 않음**을 의미한다.
+
+```mermaid
+flowchart LR
+  subgraph legacy [레거시 모듈(개념)]
+    CLIP1[CLIP<br/>카테고리]
+    MTL[FashionMTLModel<br/>재질·패턴·스타일]
+    MH[MHAttentionRanker<br/>조화도]
+    YO[YOLOv8<br/>사람 탐지]
+  end
+  IN[이미지] --> CLIP1
+  IN --> MTL
+  IN --> MH
+  IN --> YO
+```
+
+`main.py` 기준으로 당시 운용은 대략 다음과 같다.
+
+- **조화**: `POST /api/predict-harmony`·`POST /api/harmony-score` → `harmony_score(...)`(MH-Attn ranker), 일부 조건에서 `calculate_harmony_score(...)` 규칙 폴백
+- **속성**: `POST /api/classify-fashion-attributes` → EfficientNet-B3 **Fashion MTL**
+- **의류 타입**: `POST /api/classify-clothing-type` → YOLO 보조 + CLIP 우선, 실패 시 ImageNet 계열 폴백
+- **전처리**: `POST /api/remove-background`, `POST /api/extract-colors`
+
+엔드포인트별 호출 흐름은 아래와 같이 정리할 수 있다.
+
+```mermaid
+flowchart TB
+    U[Client / Frontend] --> A1["POST /api/predict-harmony"]
+    U --> A2["POST /api/harmony-score"]
+    U --> A3["POST /api/classify-fashion-attributes"]
+    U --> A4["POST /api/classify-clothing-type"]
+    U --> A5["POST /api/remove-background"]
+    U --> A6["POST /api/extract-colors"]
+
+    A1 --> B1["harmony_score(...)"]
+    B1 --> C1{"fallback 조건?"}
+    C1 -- 아니오 --> D1["MH-Attn Ranker 결과 반환"]
+    C1 -- 예 --> E1["calculate_harmony_score(...)"]
+    E1 --> D1
+
+    A2 --> B2["harmony_score(...)"]
+    B2 --> D2["MH-Attn 점수/랭킹 반환"]
+
+    A3 --> B3["get_mtl_model()"]
+    B3 --> C3["Fashion MTL 추론<br/>style/material/pattern"]
+    C3 --> D3["속성 클래스 + confidence 반환"]
+
+    A4 --> B4["YOLO person 감지"]
+    B4 --> C4["CLIP 분류 시도"]
+    C4 --> D4{"CLIP 성공?"}
+    D4 -- 예 --> E4["의류 타입 반환"]
+    D4 -- 아니오 --> F4["ImageNet 계열 분류 폴백"]
+    F4 --> E4
+
+    A5 --> R1["rembg 배경 제거 결과 반환"]
+    A6 --> R2["대표 색상 추출 결과 반환"]
+```
+
+#### 1.2 평가 범위(베이스라인 실험에서 무엇을 봤는가)
+
+| 측면 | 지표(예) |
+|------|----------|
+| **아이템 속성 (Fashion MTL)** | Accuracy, Macro F1, Weighted F1, Top-3 Accuracy |
+| **조화 랭킹 (Harmony Ranker)** | Pairwise Accuracy(페어 단위 정답 비율) |
+
+즉 **“아이템 이해”**와 **“조합 어울림”**을 동시에 본다.
+
+#### 1.3 Harmony Ranker (MH-Attn) 성능
+
+레거시 **MHAttentionRanker**는 오프라인 평가에서 **Pairwise Accuracy 약 0.756** 수준이었다. 이후 FashionHarmony 실험(AUC 등, 프로토콜 상이)과 비교할 때의 출발점으로 쓴다.
+
+#### 1.4 Fashion MTL 분류 성능 (레거시 체크포인트 기준)
+
+| Task     | Accuracy | Macro F1 | Weighted F1 | Top-3 Accuracy |
+| -------- | -------- | -------- | ----------- | -------------- |
+| Style    | 0.635833 | 0.634632 | 0.634632    | 0.899671       |
+| Material | 0.666075 | 0.125872 | 0.631835    | 0.856772       |
+| Pattern  | 0.844358 | 0.186979 | 0.821423    | 0.935371       |
+
+`Pattern`은 상위 후보 포찡이 강하고, `Material`·`Pattern`의 Macro F1은 **클래스 불균형** 영향 가능성이 있다. 이 수치는 이후 **클래스 수를 줄이고 라벨을 정제하는 동기**(K-Fashion 등)로 이어진다.
+
+---
+
+### 2. 베이스라인이 드러낸 한계와 개선 원칙
+
+사람은 코디를 **색 점수 + 재질 점수…**처럼 분해해 더하지 않는다. 상의·하의·신발이 한 장면에 있을 때 **톤·실루엣·질감·패턴 충돌**을 동시에 읽고 “어울린다”고 판단한다. 레거시는 이 인지 과정과 달리 **모듈을 쌓는 구조**에 가까웠다.
+
+| 한계 | 설명 |
+|------|------|
+| **표현 공간 분리** | CLIP·MTL·랭커가 각자 학습·추론해 **공동 임베딩**으로 세트 맥락을 일관되게 쓰기 어렵다 |
+| **세부 점수의 의미** | API 상 `score_color` 등이 **총점의 고정 비율**에 가깝게 채워지는 등, 축별 “진짜 분해”가 어렵다 |
+| **랭커 상한** | MH-Attn은 베이스라인에서 쓸 만했으나 Pairwise Acc **~0.756**에 머물고, **세트 전체를 한 번에 학습한 모델** 여지가 있다 |
+| **속성 과다 클래스** | 재질·패턴 세분류 + 노이즈 라벨은 **희귀 클래스** 예측을 불안정하게 한다 |
+| **제품 공백** | **웹캠·실시간** 경로가 없었다 |
+
+그래서 개선 원칙을 이렇게 세웠다.
+
+- **공유 백본·통합 표현**: 속성 로짓과 조화 판단이 같은 특징 흐름을 공유하도록
+- **데이터 기반 정렬**: contrastive / ranking 등으로 “맞는 조합·틀린 조합”을 표현 공간에서 정렬
+- **세트 단위 구조**: attention 기반으로 **아웃핏 전체 상호작용**을 직접 모델링
+- **설명 보강**: 축별 라벨이 없는 한 **CLIP 피드백·총점 구간 문장**으로 사용자 설명을 보완(현재 서비스에 반영)
+
+---
+
+### 3. 학문적 배경과 선행연구
+
+위와 같은 **구조적·정량적 한계**를 넘어설 아이디어를 찾기 위해, 패션 조화·호환성을 **학계에서 어떻게 다뤄 왔는지**를 정리했다. 패션 조화도 예측은 대체로 **pairwise**(아이템 쌍 단위)에서 **세트 단위(set-level) 상호작용** 모델링으로 확장되는 흐름이며, HUWARI가 Set Transformer 쪽을 택한 근거도 여기에 닿아 있다.
+
+| 연구 | 핵심 아이디어 | 본 프로젝트와의 관계 |
+|------|---------------|----------------------|
+| **Type-Aware Embedding** (Vasileva et al., 2018) | 카테고리 쌍별 임베딩으로 궁합 학습, Polyvore 벤치 정착 | pairwise로는 **A-B, B-C가 맞아도 A-B-C 전체**가 조화롭다고 보기 어렵다는 구조적 한계를 이해하는 기준 |
+| **VICTOR** (Papadopoulos et al., 2022) | Transformer로 아웃핏 내 여러 아이템 동시 처리, 텍스트·이미지 활용, Polyvore-Disjoint **AUC ~0.92** 보고 | 세트 동시 모델링 방향은 참고하되, **텍스트 입력 의존**은 실서비스 UX와 맞지 않아 피함 |
+| **CLIP 하이브리드 멀티모달** (Kalashi & Teimourpour, 2024) | CLIP 기반 고성능 경향 | 역시 **텍스트가 필요한 설정**이 많아, HUWARI는 **이미지 중심 조화 경로**를 우선 |
+
+**HUWARI가 택한 방향**은 위 흐름을 참고하되, (1) **Set Transformer로 세트 단위 판단**을 강화하고, (2) **이미지만으로 조화 예측**이 가능한 경로를 두며(Polyvore-U 학습 등에서 **AUC ~0.912**까지 확인한 실험 설정이 있음), (3) 그 결과를 **FastAPI + React·웹캠**까지 연결하는 **실사용 서비스**로 완성하는 것이다.
+
+---
+
+### 4. 개선 실험: FashionHarmony와 데이터 재정렬
+
+원칙을 코드와 실험으로 옮긴 순서를 **단계**로 나누면 다음과 같다.
+
+#### 4.1 Polyvore-U로 통합 조화 모델 학습 (FashionHarmonyModel)
+
+**모델 골격**: EfficientNet-B3 특징 → **AttributeHeads**(카테고리·재질·패턴·스타일 등) → **Set Transformer**(패딩 마스크와 함께 세트 전체 조화 점수 0~1). 서비스에 올린 구현 요약은 [§5 현재 서비스](#improved-pipeline)의 **FashionHarmonyModel** 안내를, 코드·차원은 `models/fashion_harmony.py`를 본다.
+
+**데이터 (Hugging Face `Marqo/polyvore`)**
+
+| 항목 | 규모 |
+|------|------|
+| 이미지 | 약 84,686장 |
+| 아웃핏 세트 | 약 20,062개 |
+
+**학습 과정 요약 (예: Colab Pro, T4)**
+
+| 단계 | 내용 | 비고 |
+|------|------|------|
+| Contrastive | 백본 표현 | 중간 분류 acc 약 **0.630** |
+| 속성 헤드 | SigLIP 자동 라벨 등(예: 7,715장 규모) | 노이즈 이슈 → 이후 K-Fashion 동기 |
+| Set Transformer | Polyvore-U 세트 단위 | acc 약 **0.707** |
+| 파인튜닝 | 전체 미세조정 | acc 약 **0.729** |
+| 평가 | 세트 호환성 | **AUC 약 0.912** (SigLIP 라벨·해당 실험 설정 기준) |
+
+**트러블슈팅**: 임베딩 **L2 정규화 제거**, `OutfitDataset` pos/neg **버그 수정**, contrastive **temperature** 정리.
+
+<a id="k-fashion-retrain"></a>
+#### 4.2 K-Fashion으로 속성 체계 재정의·재학습
+
+**문제**: `FashionMTLModel` 계열의 **과다 클래스**와 자동 라벨 노이즈로 희귀 클래스가 잘 안 잡힘.
+
+**대응**: **AI Hub K-Fashion** 파싱, 스타일별 샘플링, **소수 그룹**(연구 노트 기준 예: 재질 8·패턴 9·스타일 10 등)으로 재정의·전문가 라벨 방향.
+
+| 항목 | 규모 |
+|------|------|
+| 원본 이미지 | 약 967,806장 (zip 3개) |
+| 스타일당 샘플 | 5,000장 |
+| 실험 파싱 합 | 약 50,000장 |
+
+**속성 분류만 본 지표 (K-Fashion)**
+
+| 태스크 | Accuracy |
+|--------|----------|
+| style | **0.406** |
+| material | **0.635** |
+| pattern | **0.809** |
+| 평균 | **0.617** |
+
+스타일은 **단일 아이템**보다 **전체 코디**가 있어야 하는 태스크라 정확도가 상대적으로 낮다.
+
+#### 4.3 Set Transformer 재학습 (속성·라벨 정렬 후)
+
+| 지표 | 값 |
+|------|-----|
+| Accuracy | **0.768** |
+| AUC | **0.871** |
+
+| 모델 | 지표 | 값 |
+|------|------|-----|
+| MH-Attn (베이스라인) | Pairwise Acc | **0.756** |
+| FashionHarmony (재학습 후) | AUC | **0.871** |
+
+AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조화를 직접 학습한 통합 모델**로 실무 수준 판별 품질을 올렸고, **0.912 → 0.871**처럼 수치가 내려가도 **K-Fashion 라벨 신뢰도**와의 트레이드오프로 볼 수 있다.
+
+#### 4.4 성과·운영 시 한계(요약)
+
+| 항목 | 레거시 | 개선 후 |
+|------|--------|---------|
+| 조화 | MH-Attn 중심 (Pairwise Acc ~0.756) | FashionHarmony + Set Transformer (실험 AUC ~0.871 등) |
+| 속성 | 다세분류·노이즈 | K-Fashion·축소 클래스 방향 + 통합 모델 헤드 |
+| 웹캠 | 없음 | YOLO 크롭 + 동일 조화 함수 |
+| 서비스 | API 단편 | FastAPI + React |
+
+| # | 한계 |
+|---|------|
+| 1 | 스타일은 단일 이미지로 한계 — 전체 코디 맥락 필요 |
+| 2 | 축별 **독립 조화 라벨** 부재 → 세부 조화 점수 **모델 직접 분해** 어려움 → **CLIP 피드백**·총점 구간 문장으로 보완 |
+| 3 | API 호환용 `score_color` 등은 `score_total`의 고정 비율(현재 **0.95**배) — [§5.3](#predict-harmony-api) 참고 |
+
+**이 저장소와의 대응**
+
+- **조화 점수**: `FashionHarmonyModel` + `fashion_harmony_final.pt` — 통합 속성 헤드는 코드상 **카테고리 5 · 재질 12 · 패턴 13 · 스타일 10** (`models/fashion_harmony.py`).
+- **아이템 속성(UI·히스토리)**: 별도 **`FashionMTLModel`** (`fashion_mtl_model.pt`, **97·70·8** 로짓) + `main.py` 표시 버킷. 연구 스토리의 “K-Fashion 축소”는 **통합 조화 모델 쪽 학습·타깃**과 함께 이해하면 된다.
+
+---
+
+<a id="improved-pipeline"></a>
+### 5. 현재 서비스: 구현 개요
+
+실험 모델을 **웹에서 쓰는 형태**로 옮긴 것이며, 본 절에서는 **역할 분담과 흐름**만 요약한다. 엔드포인트 목록은 [§5.5](#section-511-rest)에, 구현 세부는 저장소 소스에서 확인할 수 있다.
+
+#### 5.1 설계 목표
+
+1. 여러 아이템을 한 코디로 보고 **조화 점수(0~100)** 를 낸다.
+2. 화면·히스토리용 **재질·패턴·스타일**은 **`FashionMTLModel`** (`fashion_mtl_model.pt`)로 채운다.
+3. **CLIP**으로 코디 패널과 짧은 설명을 맞춰 본 뒤, 한국어 **`reasons`** 를 덧붙인다.
+4. **웹캠**으로 프레임을 넣을 수 있다. 백엔드에는 **YOLO**로 상·하의 크롭까지 포함한 **`webcam-harmony`** 가 있으나, **현재 Home UI**는 캡처한 한 장을 업로드와 동일하게 **의류 분류·배경 제거** 후 캔버스에 올리고 **`predict-harmony`** 로 조화를 본다(§5.2).
+
+스택은 **React·Vite + FastAPI**이며, **히스토리** 저장을 지원한다.
+
+#### 5.2 런타임 흐름 (UI·서버)
+
+**Home** 화면은 왼쪽에 **코디 작업 영역**, 오른쪽에 **조화 점수·피드백**을 둔다. 입력 방식은 상단에서 **「코디 업로드」** 와 **「웹캠」** 으로 바꿀 수 있으며, 선택 값은 `localStorage`의 `huwari_input_mode`에 저장된다.
+
+**공통**: 캔버스에 올라간 아이템 목록(`beforeItems`)이 바뀔 때마다, 프론트는 약 **400ms 디바운스** 뒤 `POST /api/predict-harmony` 를 호출한다. 요청 본문은 `{ beforeItems, afterItems }` 이며, 현재 구현에서는 **`afterItems`는 빈 배열**로 고정되어 있어 **기준 코디만** 서버에 전달된다. 응답의 `score_total`, `reasons` 등으로 오른쪽 패널(점수·캐릭터 표정·피드백 문장)이 갱신되고, 동일 구성에 대한 결과는 `huwari_harmony_cache`에 시그니처와 함께 캐시된다. 아이템이 하나도 없으면 조화 요청은 보내지 않고 점수 영역을 비운다.
+
+**코디 업로드** (`ItemPlacementArea`): 사용자가 파일을 고르면 서버에 **`/api/classify-clothing-type`**(의류 종류)와 **`/api/remove-background`**(배경 제거)를 병렬로 호출한다. 성공 시 종류에 맞는 위치에 **배경이 제거된 이미지(data URL)** 가 캔버스에 놓인다. 이어서 같은 아이템에 대해 비동기로 **`/api/extract-colors`**(대표 색)와 **`/api/classify-fashion-attributes`**(재질·패턴·스타일)를 호출해 카드 정보를 채운다. 사용자는 드래그·리사이즈로 배치를 바꿀 수 있으며, 배치가 바뀌어도 `beforeItems` 객체가 갱신되면 위 디바운스 규칙에 따라 조화가 다시 요청된다.
+
+**웹캠**: 브라우저 **`getUserMedia`** 로 카메라를 켠 뒤, 캡처 시점의 프레임을 JPEG로 만든다. 이후 흐름은 업로드와 같게 **`/api/classify-clothing-type`** 와 **`/api/remove-background`** 를 병렬 호출하고, 나온 이미지를 캔버스에 한 아이템으로 추가한다. 색·속성 역시 **`extract-colors`**, **`classify-fashion-attributes`** 로 비동기 보강한다. 조화 계산은 역시 **`predict-harmony`** 한 경로이다.
+
+백엔드에는 전신 프레임에서 사람을 찾아 상·하의로 나눈 뒤 조화까지 한 번에 처리하는 **`POST /api/webcam-harmony`** 도 있으나, **현재 `Home.tsx` 프론트는 이 경로를 호출하지 않는다.** (API 목록·다른 클라이언트용으로 유지된다.)
+
+```mermaid
+flowchart TD
+  subgraph input [입력]
+    UP[코디 업로드: 파일 선택]
+    WC[웹캠: 캡처]
+  end
+  subgraph place [캔버스에 올리기]
+    TB["classify-clothing-type + remove-background"]
+    CV[beforeItems 갱신]
+  end
+  subgraph extra [같은 아이템 비동기]
+    EC[extract-colors]
+    FA[classify-fashion-attributes]
+  end
+  subgraph harm [조화]
+    DB[beforeItems 변경 후 약 400ms]
+    PH[predict-harmony]
+    RS[점수·reasons·캐릭터 UI]
+  end
+  UP --> TB
+  WC --> TB
+  TB --> CV
+  CV --> EC
+  CV --> FA
+  CV --> DB
+  DB --> PH
+  PH --> RS
+```
+
+<a id="fashion-harmony-arch"></a>
+
+**FashionHarmonyModel**은 EfficientNet-B3 계열 백본, 슬롯별 속성, Set Transformer로 세트 점수를 낸다. 가중치는 `models/fashion_harmony_final.pt`, 정의는 **`models/fashion_harmony.py`** 에 있다. **조화 입력은 슬롯 4개(앞쪽 4장)** 에 맞추고, 그 이상 올린 장은 **점수에는 반영되지 않을 수 있으나** 장별 MTL은 계속할 수 있다.
+
+<a id="predict-harmony-api"></a>
+#### 5.3 응답·운용 시 유의사항
+
+- **기준 코디가 비어 있으면** 중립 점수(50대)와 고정 안내 문구를 반환한다.
+- **`score_color` 등 네 항목**은 스키마 호환을 위해 **`score_total`의 약 0.95배**로 맞춘 값이며, 축별 독립 추정이 아니다.
+- **미리보기 전용** API는 조화 점수 없이 검출·크롭 정보만 반환한다.
+
+UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 수 있다. MTL·버킷 매핑과 K-Fashion 맥락은 [4.2절](#k-fashion-retrain)을 참고한다.
+
+#### 5.4 부가 기능·로컬 실행
+
+**배경 제거**, **대표 색 추출**, **히스토리**는 필요 시 별도 API로 쓴다. 히스토리는 **서버 메모리**에 두며 재시작 시 비워진다. 로컬 개발 시 프론트는 보통 **3000**, 백엔드는 **8000** 포트이며, Vite가 `/api` 를 FastAPI로 넘긴다.
+
+<a id="section-511-rest"></a>
+#### 5.5 주요 HTTP 엔드포인트
+
+| 기능 | HTTP 경로 | 비고 |
+|------|-----------|------|
+| 조화·이미지별 속성(캔버스) | `POST /api/predict-harmony` | before/after URL·data URL |
+| 웹캠 조화·크롭 속성 | `POST /api/webcam-harmony` | multipart 1장 |
+| 웹캠 미리보기(검출만) | `POST /api/detect-clothing` | 조화 없음 |
+| 속성만 | `POST /api/classify-fashion-attributes` | 1장 |
+| 의류 타입만 | `POST /api/classify-clothing-type` | 1장 |
+| 배경 제거·색·히스토리 | `remove-background`, `extract-colors`, `save-history`, `get-history`, `delete-history/{id}` | 히스토리는 메모리 |
+
+**요약**: **FashionHarmonyModel**이 세트 조화 점수를, **FashionMTLModel**이 아이템 속성을, **CLIP**이 의류 타입·피드백 문장을 담당한다. **YOLO**는 의류 타입 API의 보조 신호 및 **`webcam-harmony`** 등 백엔드 웹캠 경로에서 사용된다.
+
+---
+
+### 참고문헌
+
+1. Vasileva, M., Plummer, B. A., Dusad, K., Rajpal, S., Kumar, R., & Forsyth, D. (2018). **Learning Type-Aware Embeddings for Fashion Compatibility**. *ECCV 2018*. [https://arxiv.org/pdf/1803.09196](https://arxiv.org/pdf/1803.09196)
+2. Papadopoulos et al. (2022). **VICTOR** (Transformer 기반 outfit compatibility). [https://arxiv.org/pdf/2207.13458](https://arxiv.org/pdf/2207.13458)
+3. Kalashi and Teimourpour (2024). **CLIP 기반 하이브리드 멀티모달 접근**. [https://arxiv.org/pdf/2511.07573](https://arxiv.org/pdf/2511.07573)
+
 ## 주요 기능
 
 - **이미지 업로드 및 전처리**
@@ -90,8 +413,9 @@ huwari/
 ├─ main.py                 # FastAPI 서버 및 API 엔드포인트
 ├─ harmony.py              # 규칙 기반 조화 점수 계산 로직
 ├─ models/
-│  ├─ harmony_ranker.py    # MHAttentionRanker + EfficientNet-B0 임베딩
-│  └─ fashion_mtl.py       # 재질/패턴/스타일 MTL 모델
+│  ├─ fashion_harmony.py    # FashionHarmonyModel (백본+속성헤드+Set Transformer)
+│  ├─ harmony_ranker.py    # MHAttentionRanker + EfficientNet-B0 임베딩(레거시)
+│  └─ fashion_mtl.py       # 재질/패턴/스타일 MTL 모델(API 속성용)
 ├─ requirements.txt        # Python 의존성
 ├─ package.json            # Node 의존성 및 스크립트
 └─ vite.config.ts          # 프론트 dev 서버(3000) + /api 프록시(8000)
@@ -106,449 +430,21 @@ huwari/
 - `POST /api/classify-fashion-attributes`
 - `POST /api/classify-clothing-type`
 - `POST /api/predict-harmony`
+- `POST /api/webcam-harmony`
+- `POST /api/detect-clothing`
 - `POST /api/save-history`
 - `GET /api/get-history`
 - `DELETE /api/delete-history/{history_id}`
 
 ## 모델 구성 메모
 
+- `models/fashion_harmony.py` (서비스 조화 점수 기본)
+  - `FashionHarmonyModel`: EfficientNet-B3 백본 + 속성 헤드 + Set Transformer.
+  - 체크포인트 `fashion_harmony_final.pt` — 배경·실험·구현은 [HUWARI 연구·개발 스토리](#research-journey) 절을 본다.
 - `models/harmony_ranker.py`
-  - `MHAttentionRanker`를 사용해 before 세트와 after 아이템의 관계를 점수화한다.
-  - 입력 임베딩은 `EfficientNet-B0`(timm) 기반으로 추출한다.
+  - 레거시 `MHAttentionRanker` + `EfficientNet-B0` 임베딩 경로(베이스라인·비교 실험용으로 위 스토리 절에 기록됨).
 - `models/fashion_mtl.py`
   - Multi-Task Learning으로 3개 태스크를 동시에 예측한다.
   - 태스크: 재질(Material), 패턴(Pattern), 스타일(Style)
 - `main.py`
   - 의류 타입 분류 시 CLIP을 우선 시도하고 실패 시 ImageNet 기반 분류기로 폴백한다.
-
-## Baseline Evaluation (기존 파이프라인 기준선)
-
-모델 개선에 앞서, 기존 파이프라인의 성능을 먼저 측정하였다.  
-아래 결과는 이후 파이프라인 변경 실험의 기준선(Baseline)으로 사용한다.
-
-### 1) 기존 파이프라인 개요
-
-`main.py` 기준으로 기존 시스템은 **목적별 API 파이프라인**으로 구성된다.
-즉, 하나의 요청이 모든 모듈을 순차적으로 통과하는 구조가 아니라, 엔드포인트별로 필요한 모델이 호출된다.
-
-- **조화 점수 파이프라인**
-  - `POST /api/predict-harmony`: 기본적으로 `harmony_score(...)`(MH-Attn ranker) 사용
-  - 일부 조건(예: before 이미지가 매우 제한적인 경우)에서 `calculate_harmony_score(...)` 규칙 기반 폴백
-  - `POST /api/harmony-score`: 이미지 입력 기반 `harmony_score(...)` 전용 경로
-- **속성 분류 파이프라인**
-  - `POST /api/classify-fashion-attributes`
-  - EfficientNet-B3 기반 Fashion MTL로 `style/material/pattern` 동시 예측
-- **의류 타입 분류 파이프라인**
-  - `POST /api/classify-clothing-type`
-  - YOLO로 인물 감지 보조 신호 추출 후, CLIP 우선 분류 / 실패 시 ImageNet 계열 모델 폴백
-- **전처리/보조 API**
-  - `POST /api/remove-background`, `POST /api/extract-colors`
-
-### 2) 기존 파이프라인 처리 흐름
-
-요청 목적에 따라 아래 중 하나(또는 복수)를 호출하는 방식으로 운용한다.
-
-1. **조화 점수 계산**
-  - 입력: `before`/`after` 아이템(또는 이미지 파일)
-  - 처리: MH-Attn ranker 중심 점수 계산, 일부 케이스 규칙 기반 폴백
-  - 출력: 조화 점수 및 랭킹 관련 결과
-2. **속성 분류**
-  - 입력: 단일 의류 이미지
-  - 처리: Fashion MTL 추론
-  - 출력: `style/material/pattern` 클래스와 confidence
-3. **의류 타입 분류**
-  - 입력: 단일 의류 이미지
-  - 처리: YOLO 보조 신호 + CLIP/ImageNet 분류
-  - 출력: 상의/하의/모자/신발/악세서리 타입
-4. **보조 전처리**
-  - 배경 제거, 색상 추출 API는 필요 시 별도로 호출
-
-### 2-1) 기존 파이프라인 시각화 (엔드포인트별)
-
-```mermaid
-flowchart TB
-    U[Client / Frontend] --> A1["POST /api/predict-harmony"]
-    U --> A2["POST /api/harmony-score"]
-    U --> A3["POST /api/classify-fashion-attributes"]
-    U --> A4["POST /api/classify-clothing-type"]
-    U --> A5["POST /api/remove-background"]
-    U --> A6["POST /api/extract-colors"]
-
-    A1 --> B1["harmony_score(...)"]
-    B1 --> C1{"fallback 조건?"}
-    C1 -- 아니오 --> D1["MH-Attn Ranker 결과 반환"]
-    C1 -- 예 --> E1["calculate_harmony_score(...)"]
-    E1 --> D1
-
-    A2 --> B2["harmony_score(...)"]
-    B2 --> D2["MH-Attn 점수/랭킹 반환"]
-
-    A3 --> B3["get_mtl_model()"]
-    B3 --> C3["Fashion MTL 추론<br/>style/material/pattern"]
-    C3 --> D3["속성 클래스 + confidence 반환"]
-
-    A4 --> B4["YOLO person 감지"]
-    B4 --> C4["CLIP 분류 시도"]
-    C4 --> D4{"CLIP 성공?"}
-    D4 -- 예 --> E4["의류 타입 반환"]
-    D4 -- 아니오 --> F4["ImageNet 계열 분류 폴백"]
-    F4 --> E4
-
-    A5 --> R1["rembg 배경 제거 결과 반환"]
-    A6 --> R2["대표 색상 추출 결과 반환"]
-```
-
-
-
-### 3) 평가 범위
-
-본 프로젝트는 두 가지 성능을 함께 측정한다.
-
-- **아이템 속성 분류 성능 (Fashion MTL)**
-  - 지표: `Accuracy`, `Macro F1`, `Weighted F1`, `Top-3 Accuracy`, `Classification Report`
-- **조화 점수 랭킹 성능 (Harmony Ranker)**
-  - 지표: `Pairwise Accuracy`, `Recall@1/5/10`, `NDCG@10`, `MRR` (오프라인 평가 프로토콜 기준)
-
-한 줄 요약: 아이템 자체를 이해하는 분류 성능과, 아이템 조합 어울림을 판단하는 랭킹 성능을 함께 평가한다.
-
-### 4) Harmony Ranker 베이스라인 결과
-
-후보군(`candidates`) 크기를 달리해 `MLP`와 `MH-Attn`을 비교한 결과이다.
-
-
-| model   | candidates | Recall@1 | Recall@5 | Recall@10 | NDCG@10  | MRR      |
-| ------- | ---------- | -------- | -------- | --------- | -------- | -------- |
-| MH-Attn | 50         | 0.054    | 0.211    | 0.401     | 0.192672 | 0.160095 |
-| MH-Attn | 100        | 0.033    | 0.118    | 0.215     | 0.106912 | 0.101732 |
-| MH-Attn | 200        | 0.011    | 0.071    | 0.116     | 0.056090 | 0.058059 |
-| MLP     | 50         | 0.047    | 0.200    | 0.349     | 0.171474 | 0.149013 |
-| MLP     | 100        | 0.026    | 0.112    | 0.193     | 0.093930 | 0.090119 |
-| MLP     | 200        | 0.007    | 0.064    | 0.117     | 0.053244 | 0.052415 |
-
-
-#### 지표 정의
-
-- `Recall@K`: 정답이 상위 K개 안에 포함될 확률 (높을수록 좋음)
-- `NDCG@10`: 상위 랭크일수록 높은 가중치를 주는 순위 품질 지표 (높을수록 좋음)
-- `MRR`: 정답이 처음 등장한 순위의 역수 평균 (높을수록 좋음)
-
-#### Baseline Pipeline (Mermaid)
-
-```mermaid
-flowchart LR
-    A[입력 이미지 세트<br/>Before / After] --> B[전처리<br/>Resize / Normalize]
-    B --> C[임베딩 추출기<br/>EfficientNet-B0]
-    C --> D[후보군 생성<br/>candidates = 50 / 100 / 200]
-    D --> E1[MH-Attn Ranker]
-    D --> E2[MLP Baseline]
-    E1 --> F[아이템별 스코어 산출]
-    E2 --> F
-    F --> G[정렬 Top-K 추출]
-    G --> H[평가 지표 계산<br/>Recall@1,5,10 / NDCG@10 / MRR]
-    H --> I[모델별 성능 비교]
-```
-
-
-
-#### 핵심 관찰
-
-- 후보군이 커질수록 난이도가 올라가며 두 모델 모두 지표가 하락한다.
-- 모든 후보군 설정에서 `MH-Attn`이 `MLP`보다 우세하다.
-- 특히 `candidates=50`에서 격차가 가장 크다.
-
-#### 모델 간 차이(절대값, MH-Attn - MLP)
-
-
-| candidates | Delta Recall@1 | Delta Recall@5 | Delta Recall@10 | Delta NDCG@10 | Delta MRR |
-| ---------- | -------------- | -------------- | --------------- | ------------- | --------- |
-| 50         | +0.007         | +0.011         | +0.052          | +0.021198     | +0.011082 |
-| 100        | +0.007         | +0.006         | +0.022          | +0.012982     | +0.011613 |
-| 200        | +0.004         | +0.007         | -0.001          | +0.002846     | +0.005644 |
-
-
-### 5) Fashion MTL 분류 성능 결과
-
-기존 파이프라인의 아이템 속성 분류(Fashion MTL) 성능은 아래와 같다.
-
-
-| Task     | Accuracy | Macro F1 | Weighted F1 | Top-3 Accuracy |
-| -------- | -------- | -------- | ----------- | -------------- |
-| Style    | 0.635833 | 0.634632 | 0.634632    | 0.899671       |
-| Material | 0.666075 | 0.125872 | 0.631835    | 0.856772       |
-| Pattern  | 0.844358 | 0.186979 | 0.821423    | 0.935371       |
-
-
-간단 해석:
-
-- `Pattern`은 Accuracy와 Top-3 Accuracy가 가장 높아 상위 후보 포착 성능이 우수하다.
-- `Material`, `Pattern`의 Macro F1이 낮은 점은 클래스 불균형 영향 가능성을 시사한다.
-- 향후 개선 실험에서는 클래스 재가중치, 리샘플링, focal loss 등 불균형 완화 기법을 함께 검토할 수 있다.
-
-### 6) 왜 파이프라인을 고치게 되었는가
-
-사람은 코디를 판단할 때 `색상 점수 -> 재질 점수 -> 패턴 점수`처럼 항목을 분리해 계산하지 않는다.  
-상의, 하의, 신발이 함께 놓인 전체 착장을 한 번에 보고, 아이템 간 조합 맥락(톤의 조화, 실루엣 균형, 질감 대비, 패턴 충돌 여부)을 동시에 받아들여 "어울린다/안 어울린다"를 직관적으로 판단한다.  
-즉 실제 판단은 개별 점수 합산이 아니라, 세트 전체 상호작용을 한 번에 읽는 과정에 가깝다.
-
-기존 파이프라인의 한계는 다음과 같다.
-
-1. **모듈 간 표현 공간 분리**
-  - 카테고리/재질/패턴/조화 점수 모델이 각각 별도로 동작한다.
-  - 각 모듈이 본 정보가 공동 표현으로 통합되지 않아, 세트 맥락을 일관되게 반영하기 어렵다.
-2. **설명 신뢰도 문제**
-  - 조화 점수와 세부 요인(색상/재질/패턴/스타일)의 연결이 약하면, 사용자에게 제공되는 근거 설명의 신뢰도가 낮아진다.
-  - 즉, "왜 이 조합이 어울리는지"를 모델 내부 표현과 정합적으로 설명하기 어렵다.
-3. **조합 단위 상호작용 모델링 부족**
-  - 아이템을 독립적으로 분석한 뒤 후처리로 결합하면, 아이템 간 관계(예: 상의-하의-신발의 상호 맥락)를 충분히 반영하기 어렵다.
-
-따라서 개선 방향은 다음과 같다.
-
-- **공유 백본 기반 통합 표현**: 하나의 임베딩 공간에서 속성과 조화 판단을 함께 다룰 수 있도록 설계
-- **데이터 기반 정렬 학습**: 어울리는 조합은 가깝게, 어울리지 않는 조합은 멀게 학습하는 방식(contrastive/ranking) 강화
-- **세트 단위 판단 구조**: 개별 점수 합산이 아니라, 세트 전체 상호작용을 attention 기반으로 모델링
-- **설명 가능성 개선**: 조화 점수와 속성 설명이 동일 표현에서 일관되게 나오도록 정렬
-
----
-
-## 연구 배경 및 선행연구 한계
-
-패션 조화도 예측 연구는 대체로 **pairwise 기반 접근**에서 **세트 단위(set-level) 상호작용 모델링**으로 확장되는 흐름을 보여 왔다.
-
-### 1) Type-Aware Embedding (Vasileva et al., 2018)
-
-Vasileva et al. (2018)은 **Type-Aware Embedding**을 통해 아이템 궁합을 pairwise로 학습하는 접근을 제시했다.  
-핵심은 상의-하의, 하의-신발처럼 카테고리 쌍별 임베딩 관계를 학습하는 점이며, Polyvore 기반 벤치마크 정착에 기여한 연구로 자주 인용된다.  
-또한 Polyvore 데이터셋(68,306 outfits, 365,054 items)을 정리해 공개했고, 본 프로젝트의 비교 맥락에서도 해당 계열 벤치마크를 참고했다.
-
-다만 pairwise 방식은 구조적으로 **세트 전체 맥락**을 직접 반영하기 어렵다.  
-예를 들어 A-B, B-C가 각각 어울려도 A-B-C 전체 착장이 항상 조화롭다고 보긴 어렵다.
-
-### 2) VICTOR (Papadopoulos et al., 2022)
-
-Papadopoulos et al. (2022)의 **VICTOR**는 Transformer 구조를 사용해 outfit 내 여러 아이템을 동시에 다루는 방향을 제시했다.  
-텍스트-이미지 기반 학습을 함께 활용해 성능을 높였다는 점이 강점으로 소개되며, Polyvore-Disjoint에서 **AUC 0.92**가 보고되었다.
-
-다만 텍스트 정보를 함께 쓰는 설정에 의존하는 편이라, 실제 서비스에서 항상 동일한 입력 조건을 맞추기 어렵다는 한계가 있다.
-
-### 3) CLIP 하이브리드 멀티모달 (Kalashi and Teimourpour, 2024)
-
-Kalashi and Teimourpour (2024)는 CLIP 기반 하이브리드 멀티모달 접근을 제안하며 높은 성능을 보고했다.  
-하지만 이 계열도 텍스트 입력이 필요한 경우가 많아, 이미지 중심 사용자 흐름에서는 입력 부담이 생길 수 있다.
-
-### 4) HUWARI의 문제 정의와 개선 방향
-
-HUWARI는 위 흐름을 참고하되, 실제 서비스 사용성을 우선해 다음 방향으로 설계했다.
-
-1. **세트 단위 판단 강화**: Set Transformer 기반으로 outfit 전체 상호작용을 함께 반영
-2. **텍스트 의존 완화**: 이미지 중심으로 동작 가능한 조화 예측 경로를 구성했고, 실험 기준 **AUC 0.912**를 확인했다.
-3. **서비스 구현**: FastAPI + React 기반 웹 서비스와 웹캠 분석 기능까지 연결
-
-요약하면, HUWARI는 연구 아이디어를 참고하되 **실사용 가능한 이미지 중심 조화 분석 서비스**로 구현하는 데 초점을 두었다.
-
-### 참고문헌 (출처)
-
-1. Vasileva, M., Plummer, B. A., Dusad, K., Rajpal, S., Kumar, R., & Forsyth, D. (2018).
-  **Learning Type-Aware Embeddings for Fashion Compatibility**. *ECCV 2018*.  
-   [https://arxiv.org/pdf/1803.09196](https://arxiv.org/pdf/1803.09196)
-2. Papadopoulos et al. (2022).
-  **VICTOR** (Transformer 기반 outfit compatibility 접근).  
-   *(본 README에서는 핵심 아이디어 요약 중심으로 인용)*  
-   [https://arxiv.org/pdf/2207.13458](https://arxiv.org/pdf/2207.13458)
-3. Kalashi and Teimourpour (2024).
-  **CLIP 기반 하이브리드 멀티모달 접근**.  
-   *(본 README에서는 핵심 방향 및 한계 요약 중심으로 인용)*  
-   [https://arxiv.org/pdf/2511.07573](https://arxiv.org/pdf/2511.07573)
-
----
-
-## 개선 파이프라인 (현재 서비스)
-
-### 설계 목표
-
-1. **세트 단위 조화**: 여러 아이템을 같은 장면으로 보고 0~1(서비스에서는 ×100) 점수를 낸다.
-2. **표시용 속성**: UI·히스토리용 재질·패턴·스타일은 학습된 **Fashion MTL**(`fashion_mtl_model.pt`)로 채운다.
-3. **가벼운 자연어 피드백**: **CLIP**으로 코디 패널 이미지와 영어 프롬프트의 정합도를 보고, 한국어 라벨 몇 줄을 `reasons`에 덧붙인다.
-4. **전신 입력**: **YOLOv8n**(클래스 0=person)으로 사람 박스를 잡고, 키 높이 비율로 상·하 크롭을 만든 뒤 같은 조화 함수를 태운다.
-
----
-
-### 시스템 맥락 (개발 환경)
-
-```mermaid
-flowchart LR
-  subgraph browser [브라우저 localhost:3000]
-    UI[Vite + React]
-  end
-  subgraph proxy [Vite devServer]
-    P["/api → proxy"]
-  end
-  subgraph api [FastAPI localhost:8000]
-    M[main:app]
-  end
-  UI -->|fetch /api/...| P
-  P -->|forward| M
-```
-
-
-
-`vite.config.ts`: `server.port = 3000`, `proxy['/api'].target = 'http://localhost:8000'`.
-
----
-
-### FashionHarmonyModel 내부 구조
-
-체크포인트: `models/fashion_harmony_final.pt`. 로더: `load_harmony_model()` (`models/fashion_harmony.py`).
-
-```mermaid
-flowchart TB
-  subgraph per_slot [슬롯당 N=4 고정]
-    IMG["224×224 RGB<br/>ImageNet normalize"]
-    BB["FashionBackbone<br/>timm efficientnet_b3"]
-    AH["AttributeHeads<br/>category·material·pattern·style logits"]
-    SM["softmax → 벡터 연결 (40차원)"]
-    PR["attr_proj → embed_dim"]
-    CAT["concat(백본 임베딩, attr_emb)<br/>→ 슬롯당 1024차원"]
-  end
-  IMG --> BB --> AH
-  AH --> SM --> PR --> CAT
-  CAT --> ST["SetTransformer<br/>CLS + 4토큰, padding mask"]
-  ST --> SIG["score_head + Sigmoid<br/>→ (0,1)"]
-```
-
-
-
-- `forward(outfit_imgs, mask)`: 배치 `B`, 슬롯 `N=4`. 패딩 슬롯은 제로 텐서로 채우고 `mask`로 무시한다.  
-- **서비스 코드 주의**: `analyze_outfit`는 입력 리스트 전체에 대해 CLIP 패널을 만들지만, **위 모델에는 `torch.stack(tensors[:4])`만 넣는다**. 즉 **조화 점수는 최대 4장**이고, `predict-harmony`는 요청에서 이미지를 최대 10장까지 모은 뒤 **각 장마다 MTL**을 돌릴 수 있어, 5번째 이후 이미지는 조화 모델 점수에는 반영되지 않는다.
-
----
-
-### `analyze_outfit(images)` 처리 순서
-
-`main.py`의 공통 진입점. 웹캠·홈 조화 API 모두 여기로 수렴한다.
-
-```mermaid
-flowchart TD
-  A[PIL Image 리스트] --> B[각 이미지 224 resize + normalize]
-  B --> C[4슬롯 텐서 + mask 구성]
-  C --> D[FashionHarmonyModel 추론]
-  D --> E["score × 100 → harmony_score"]
-  A --> F[이미지들 가로로 224px씩 이어붙임<br/>outfit_img]
-  F --> G{CLIP 사용 가능?}
-  G -->|예| H[8쌍 영어 프롬프트 vs 패널<br/>sigmoid 임계값 ~0.45]
-  H --> I[최대 4줄 한국어 피드백]
-  G -->|아니오| J[clip_feedback = 빈 배열]
-  E --> K[점수 구간별 기본 문장 1줄]
-  K --> L[reasons = 기본 + CLIP]
-  I --> L
-  J --> L
-  L --> M["dict: harmony_score, reasons"]
-```
-
-
-
-**기본 `reasons` 문장**(총점 구간): ≥80 / ≥60 / ≥40 / 그 미만 각각 한 줄.  
-**CLIP 피드백**: 색·패턴·스타일·재질 네 축에 대해 긍정·부정 영어 설명 쌍을 두고, 승자 쪽 한국어 라벨을 고른다(`generate_clip_feedback`).
-
----
-
-### `POST /api/predict-harmony`
-
-```mermaid
-sequenceDiagram
-  participant C as Client
-  participant API as FastAPI
-  participant LO as load_image_from_url
-  participant AO as analyze_outfit
-  participant MTL as classify_attributes
-
-  C->>API: JSON beforeItems + afterItems
-  API->>LO: 각 item.imageUrl (data URL 등)
-  LO-->>API: PIL 리스트 (최대 10장)
-  API->>AO: all_imgs
-  AO-->>API: harmony_score, reasons
-  loop 각 이미지
-    API->>MTL: classify_attributes
-    MTL-->>API: texture/pattern/style 버킷 등
-  end
-  API-->>C: HarmonyResponse score_* , reasons, debug
-```
-
-
-
-- `beforeItems`가 비었으면 중립 점수(50대)와 고정 메시지를 반환한다.  
-- 응답의 `score_color`·`score_texture`·`score_pattern`·`score_style`는 현재 구현에서 `**score_total`의 0.95배**로 채워진다(API 스키마 호환용). 실제 세부 축은 MTL·CLIP이 아니라 이 스칼라 파생값임을 코드 읽을 때 구분하면 된다.
-
----
-
-### `POST /api/webcam-harmony` · `POST /api/detect-clothing`
-
-```mermaid
-flowchart TD
-  UP[multipart 이미지 1장] --> YO[YOLOv8n classes=0 person]
-  YO --> CONF{conf ≥ 0.5 ?}
-  CONF -->|예| BOX[첫 번째 사람 박스만 사용]
-  BOX --> TOP["상의 크롭 y: 0.20~0.55 × 키"]
-  BOX --> BOT["하의 크롭 y: 0.50~0.90 × 키"]
-  TOP --> CROPS[cropped_imgs = 상의, 하의]
-  BOT --> CROPS
-  CONF -->|검출 없음| WHOLE[cropped_imgs = 원본 1장, crops 라벨 전체]
-  CROPS --> AO2[analyze_outfit]
-  WHOLE --> AO2
-  AO2 --> OUT[harmony_score, reasons]
-  CROPS --> MTL2[크롭별 MTL]
-  MTL2 --> RES[items + crop_images base64 + detections]
-  OUT --> RES
-```
-
-
-
-- `detect-clothing`은 **조화 점수를 계산하지 않는다**. YOLO 박스·상·하 영역 메타와, 박스가 그려진 미리보기 PNG(`image` data URL)만 반환한다. 조화가 필요하면 같은 프레임으로 `webcam-harmony`를 호출하거나, 크롭을 아이템으로 올린 뒤 `predict-harmony`를 쓰면 된다.  
-- `webcam-harmony`는 한 번에 `analyze_outfit`·크롭별 MTL·크롭 PNG data URL·`detections`까지 묶어 반환한다.
-
----
-
-### CLIP의 두 가지 역할
-
-
-| 용도         | 호출 경로                                                    | 입력                          | 출력                                                      |
-| ---------- | -------------------------------------------------------- | --------------------------- | ------------------------------------------------------- |
-| **카테고리**   | `classify_category` ← `POST /api/classify-clothing-type` | 단일 의류 이미지                   | 상의/하의/모자/신발/악세서리 + softmax, 실패 시 `model_type: fallback` |
-| **코디 피드백** | `generate_clip_feedback` ← `analyze_outfit`              | 가로로 이은 코디 패널(슬롯 수 × 224 너비) | 최대 4개 한국어 짧은 문장                                         |
-
-
-모델 가중치: `openai/clip-vit-base-patch32` (`transformers` 지연 로딩).
-
----
-
-### MTL·라벨·표시 버킷
-
-- `FashionMTLModel`: 재질 97·패턴 70·스타일 8 클래스 logits.  
-- `label_maps.py`의 `MAT_ID2NAME`, `PAT_ID2NAME`으로 원시 이름 복원 후, `main.py`의 `map_material`·`map_pattern`으로 **표시용 버킷**(예: Denim, Solid)으로 줄인다.  
-- 스타일 이름은 코드 내 고정 리스트(캐주얼, 미니멀 등)로 매핑한다.
-
----
-
-### 기타 API (개선 파이프라인과 함께 쓰는 주변 기능)
-
-- `POST /api/remove-background` — rembg  
-- `POST /api/extract-colors` — RGB 픽셀 KMeans(k=5)  
-- `POST /api/save-history` · `GET /api/get-history` · `DELETE /api/delete-history/{id}` — 서버 메모리 히스토리(프로세스 재시작 시 초기화)
-
----
-
-### 프론트엔드 상태 (참고)
-
-
-| 키                      | 용도                 |
-| ---------------------- | ------------------ |
-| `currentItems`         | 캔버스에 올린 아이템        |
-| `huwari_harmony_cache` | 동일 구성 재요청 완화       |
-| `huwari_input_mode`    | 업로드 vs 웹캠          |
-| `loadHistoryItems`     | 히스토리 불러오기 직후 1회 복원 |
-
-
----
-
-### 한 줄 요약
-
-**개선 파이프라인**은 후보 랭킹이 아니라 **EfficientNet-B3 백본 + 슬롯별 속성 softmax + Set Transformer**로 세트 조화를 직접 예측하고, **별도 MTL**로 아이템 속성을 채우며, **CLIP**으로 카테고리·코디 패널 설명을 보강하는 구조다.
