@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useMemo } from 'react'
+import { OUTFIT_GUIDE, accessoryLeftOccupied } from '../constants/outfitGuide'
 
 interface ItemPlacementAreaProps {
   buttonText: string
@@ -151,28 +152,19 @@ const ItemPlacementArea = ({
       if (bgData.success && bgData.image) {
         // 가이드 라인 위치 정의 (의류 타입별)
         const guidePositions: { [key: string]: { x: number; y: number; width: number; height: number; label: string } } = {
-          '상의': { x: 50, y: 20, width: 144, height: 112, label: '상의' },
-          '하의': { x: 50, y: 46, width: 128, height: 176, label: '하의' },
-          '모자': { x: 50, y: 4, width: 96, height: 64, label: '모자' },
-          '신발': { x: 50, y: 96, width: 128, height: 48, label: '신발' },
-          '악세서리': { x: 8, y: 38, width: 96, height: 96, label: '악세서리' },
+          모자: { ...OUTFIT_GUIDE.모자 },
+          상의: { ...OUTFIT_GUIDE.상의 },
+          하의: { ...OUTFIT_GUIDE.하의 },
+          신발: { ...OUTFIT_GUIDE.신발 },
+          악세서리: { ...OUTFIT_GUIDE.악세서리_왼 },
         }
 
-        // 같은 타입이 이미 배치되어 있는지 확인
-        const existingItems = placedItems.filter(item => {
-          const itemType = Object.keys(guidePositions).find(
-            key => guidePositions[key].x === item.x && guidePositions[key].y === item.y
-          )
-          return itemType === clothingType
-        })
-
         let position
-        if (clothingType === '악세서리' && existingItems.length > 0) {
-          // 악세서리는 왼쪽/오른쪽 모두 사용 가능
-          const leftExists = placedItems.some(item => item.x === 8 && item.y === 38)
-          position = leftExists 
-            ? { x: 92, y: 38, width: 96, height: 96, label: '악세서리' }
-            : { x: 8, y: 38, width: 96, height: 96, label: '악세서리' }
+        if (clothingType === '악세서리') {
+          const slot = accessoryLeftOccupied(placedItems)
+            ? OUTFIT_GUIDE.악세서리_우
+            : OUTFIT_GUIDE.악세서리_왼
+          position = { ...slot, label: '악세서리' }
         } else {
           position = guidePositions[clothingType] || guidePositions['악세서리']
         }
@@ -614,26 +606,45 @@ const ItemPlacementArea = ({
           handleResizeEnd()
         }}
       >
-        {/* 배치 가이드 라인 */}
+        {/* 배치 가이드 라인 (좌표는 outfitGuide.ts와 업로드 삽입 위치 공통) */}
         <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-[7%] left-1/2 -translate-x-1/2 w-24 h-16 border border-secondary rounded-lg opacity-40 flex items-center justify-center">
-            <div className="text-[10px] text-secondary font-bold uppercase">모자</div>
-          </div>
-          <div className="absolute top-[23%] left-1/2 -translate-x-1/2 w-36 h-28 border border-secondary rounded-xl opacity-40 flex items-center justify-center">
-            <div className="text-[10px] text-secondary font-bold uppercase">상의</div>
-          </div>
-          <div className="absolute top-[41%] left-[14%] w-24 h-24 border border-secondary rounded-lg opacity-40 flex items-center justify-center">
-            <div className="text-[10px] text-secondary font-bold uppercase">악세서리</div>
-          </div>
-          <div className="absolute top-[41%] right-[14%] w-24 h-24 border border-secondary rounded-lg opacity-40 flex items-center justify-center">
-            <div className="text-[10px] text-secondary font-bold uppercase">악세서리</div>
-          </div>
-          <div className="absolute top-[49%] left-1/2 -translate-x-1/2 w-32 h-44 border border-secondary rounded-xl opacity-40 flex items-center justify-center">
-            <div className="text-[10px] text-secondary font-bold uppercase">하의</div>
-          </div>
-          <div className="absolute bottom-[1%] left-1/2 -translate-x-1/2 w-32 h-12 border border-secondary rounded-lg opacity-40 flex items-center justify-center">
-            <div className="text-[10px] text-secondary font-bold uppercase">신발</div>
-          </div>
+          {(['모자', '상의', '하의', '신발'] as const).map((key) => {
+            const s = OUTFIT_GUIDE[key]
+            const rounded = key === '상의' || key === '하의' ? 'rounded-xl' : 'rounded-lg'
+            return (
+              <div
+                key={key}
+                className={`absolute border border-secondary ${rounded} opacity-40 flex items-center justify-center`}
+                style={{
+                  left: `${s.x}%`,
+                  top: `${s.y}%`,
+                  transform: 'translate(-50%, 0)',
+                  width: s.width,
+                  height: s.height,
+                }}
+              >
+                <div className="text-[10px] text-secondary font-bold uppercase">{s.label}</div>
+              </div>
+            )
+          })}
+          {(['악세서리_왼', '악세서리_우'] as const).map((key) => {
+            const s = OUTFIT_GUIDE[key]
+            return (
+              <div
+                key={key}
+                className="absolute border border-secondary rounded-lg opacity-40 flex items-center justify-center"
+                style={{
+                  left: `${s.x}%`,
+                  top: `${s.y}%`,
+                  transform: 'translate(-50%, 0)',
+                  width: s.width,
+                  height: s.height,
+                }}
+              >
+                <div className="text-[10px] text-secondary font-bold uppercase">{s.label}</div>
+              </div>
+            )
+          })}
         </div>
 
         {/* 통합 처리 중 표시 (화면 중앙) */}
@@ -763,7 +774,7 @@ const ItemPlacementArea = ({
             className="absolute inset-0 z-10 flex flex-col items-center justify-center text-center pointer-events-none" 
             style={{ isolation: 'isolate' }}
           >
-            <div className="space-y-1.5">
+            <div className="translate-y-14 space-y-1.5">
               <p 
                 className="text-sm font-medium text-gray-400 leading-relaxed"
                 dangerouslySetInnerHTML={{ __html: instructionText }}

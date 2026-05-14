@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Layout from '../components/Layout'
 import ItemPlacementArea from '../components/ItemPlacementArea'
+import { OUTFIT_GUIDE, accessoryLeftOccupied } from '../constants/outfitGuide'
 
 interface PlacedItem {
   id: string
@@ -373,21 +374,20 @@ function Home() {
   }
 
   const getPositionByClothingType = (clothingType: string, items: PlacedItem[]) => {
-    const guidePositions: { [key: string]: { x: number; y: number; width: number; height: number } } = {
-      '상의': { x: 50, y: 20, width: 144, height: 112 },
-      '하의': { x: 50, y: 46, width: 128, height: 176 },
-      '모자': { x: 50, y: 4, width: 96, height: 64 },
-      '신발': { x: 50, y: 96, width: 128, height: 48 },
-      '악세서리': { x: 8, y: 38, width: 96, height: 96 },
+    if (clothingType === '악세서리') {
+      const slot = accessoryLeftOccupied(items)
+        ? OUTFIT_GUIDE.악세서리_우
+        : OUTFIT_GUIDE.악세서리_왼
+      return { x: slot.x, y: slot.y, width: slot.width, height: slot.height }
     }
-
-    const basePosition = guidePositions[clothingType] || guidePositions['악세서리']
-    if (clothingType !== '악세서리') return basePosition
-
-    const leftAccessoryExists = items.some(item => item.x === 8 && item.y === 38)
-    return leftAccessoryExists
-      ? { x: 92, y: 38, width: 96, height: 96 }
-      : basePosition
+    const main: Record<string, (typeof OUTFIT_GUIDE)['모자']> = {
+      모자: OUTFIT_GUIDE.모자,
+      상의: OUTFIT_GUIDE.상의,
+      하의: OUTFIT_GUIDE.하의,
+      신발: OUTFIT_GUIDE.신발,
+    }
+    const s = main[clothingType] ?? OUTFIT_GUIDE.악세서리_왼
+    return { x: s.x, y: s.y, width: s.width, height: s.height }
   }
 
   const extractColorsAsync = async (base64Image: string, itemId: string) => {
