@@ -46,10 +46,10 @@ HUWARI는 "지금 가진 옷 조합이 잘 어울리는지"를 빠르게 확인�
 
 ```mermaid
 flowchart LR
-  S1[1. 베이스라인·정량화] --> S2[2. 한계·개선 원칙]
-  S2 --> S3[3. 선행연구 맥락]
-  S3 --> S4[4. 모델·데이터 실험]
-  S4 --> S5[5. 현재 서비스 구현]
+  S1["1. 베이스라인·정량화"] --> S2["2. 한계·개선 원칙"]
+  S2 --> S3["3. 선행연구 맥락"]
+  S3 --> S4["4. 모델·데이터 실험"]
+  S4 --> S5["5. 현재 서비스 구현"]
 ```
 
 ---
@@ -65,7 +65,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  subgraph legacy [레거시 모듈(개념)]
+  subgraph legacy ["레거시 모듈(개념)"]
     CLIP1[CLIP<br/>카테고리]
     MTL[FashionMTLModel<br/>재질·패턴·스타일]
     MH[MHAttentionRanker<br/>조화도]
@@ -88,7 +88,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    U[Client / Frontend] --> A1["POST /api/predict-harmony"]
+    U["Client / Frontend"] --> A1["POST /api/predict-harmony"]
     U --> A2["POST /api/harmony-score"]
     U --> A3["POST /api/classify-fashion-attributes"]
     U --> A4["POST /api/classify-clothing-type"]
@@ -97,8 +97,8 @@ flowchart TB
 
     A1 --> B1["harmony_score(...)"]
     B1 --> C1{"fallback 조건?"}
-    C1 -- 아니오 --> D1["MH-Attn Ranker 결과 반환"]
-    C1 -- 예 --> E1["calculate_harmony_score(...)"]
+    C1 -->|아니오| D1["MH-Attn Ranker 결과 반환"]
+    C1 -->|예| E1["calculate_harmony_score(...)"]
     E1 --> D1
 
     A2 --> B2["harmony_score(...)"]
@@ -111,8 +111,8 @@ flowchart TB
     A4 --> B4["YOLO person 감지"]
     B4 --> C4["CLIP 분류 시도"]
     C4 --> D4{"CLIP 성공?"}
-    D4 -- 예 --> E4["의류 타입 반환"]
-    D4 -- 아니오 --> F4["ImageNet 계열 분류 폴백"]
+    D4 -->|예| E4["의류 타입 반환"]
+    D4 -->|아니오| F4["ImageNet 계열 분류 폴백"]
     F4 --> E4
 
     A5 --> R1["rembg 배경 제거 결과 반환"]
@@ -294,26 +294,26 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 
 ```mermaid
 flowchart TD
-  subgraph input [입력]
-    UP[코디 업로드: 파일 선택]
-    WC[웹캠: 캡처]
+  subgraph step_input ["입력"]
+    UP["코디 업로드: 파일 선택"]
+    WC["웹캠: 캡처"]
   end
-  subgraph place [캔버스에 올리기]
-    TB["classify-clothing-type + remove-background"]
-    CV[beforeItems 갱신]
+  subgraph step_place ["캔버스에 올리기"]
+    CLBG["classify-clothing-type + remove-background"]
+    CV["beforeItems 갱신"]
   end
-  subgraph extra [같은 아이템 비동기]
-    EC[extract-colors]
-    FA[classify-fashion-attributes]
+  subgraph step_extra ["같은 아이템 비동기"]
+    EC["extract-colors"]
+    FA["classify-fashion-attributes"]
   end
-  subgraph harm [조화]
-    DB[beforeItems 변경 후 약 400ms]
-    PH[predict-harmony]
-    RS[점수·reasons·캐릭터 UI]
+  subgraph step_harm ["조화"]
+    DB["beforeItems 변경 후 약 400ms"]
+    PH["predict-harmony"]
+    RS["점수·reasons·캐릭터 UI"]
   end
-  UP --> TB
-  WC --> TB
-  TB --> CV
+  UP --> CLBG
+  WC --> CLBG
+  CLBG --> CV
   CV --> EC
   CV --> FA
   CV --> DB
