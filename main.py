@@ -26,14 +26,19 @@ from models.fashion_harmony import (
     STYLE_CLASSES,
 )
 
-# ===== transformers (CLIP) =====
+# ===== transformers (FashionCLIP + 카테고리용 OpenAI CLIP) =====
 try:
-    from transformers import CLIPProcessor, CLIPModel
+    from transformers import AutoModel, AutoProcessor, CLIPModel, CLIPProcessor
     HAS_TRANSFORMERS = True
 except ImportError:
     HAS_TRANSFORMERS = False
-    CLIPProcessor = None
+    AutoModel = None
+    AutoProcessor = None
     CLIPModel = None
+    CLIPProcessor = None
+
+FASHION_CLIP_MODEL_ID = "Marqo/marqo-fashionCLIP"
+CATEGORY_CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
 
 app = FastAPI(title="HUWARI API")
 
@@ -46,6 +51,9 @@ _yolo_model     = None
 _clip_model     = None
 _clip_processor = None
 _use_clip       = False
+_category_clip_model     = None
+_category_clip_processor = None
+_use_category_clip       = False
 _device         = None
 
 # ===== 이미지 전처리 =====
@@ -86,53 +94,124 @@ def get_yolo_model():
 
 
 def get_clip_model():
-    """CLIP 지연 로딩"""
+    """FashionCLIP(Marqo) 지연 로딩 — 색상 점수·피드백 문구에 사용"""
     global _clip_model, _clip_processor, _use_clip
     if _clip_model is None and HAS_TRANSFORMERS:
         try:
-            _clip_processor = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
-            _clip_model     = CLIPModel.from_pretrained('openai/clip-vit-base-patch32')
+            _clip_processor = AutoProcessor.from_pretrained(
+                FASHION_CLIP_MODEL_ID, trust_remote_code=True
+            )
+            _clip_model = AutoModel.from_pretrained(
+                FASHION_CLIP_MODEL_ID, trust_remote_code=True
+            )
             _clip_model.eval()
             _use_clip = True
-            print("CLIP 로드 완료")
+            print("FashionCLIP 로드 완료")
         except Exception as e:
-            print(f"CLIP 로드 실패: {e}")
+            print(f"FashionCLIP 로드 실패: {e}")
             _use_clip = False
     return _clip_model, _clip_processor
+
+
+def get_category_clip_model():
+    """카테고리 분류용 OpenAI CLIP(ViT-B/32) 지연 로딩"""
+    global _category_clip_model, _category_clip_processor, _use_category_clip
+    if _category_clip_model is None and HAS_TRANSFORMERS and CLIPModel is not None:
+        try:
+            _category_clip_processor = CLIPProcessor.from_pretrained(CATEGORY_CLIP_MODEL_ID)
+            _category_clip_model     = CLIPModel.from_pretrained(CATEGORY_CLIP_MODEL_ID)
+            _category_clip_model.eval()
+            _use_category_clip = True
+            print("카테고리용 CLIP 로드 완료")
+        except Exception as e:
+            print(f"카테고리용 CLIP 로드 실패: {e}")
+            _use_category_clip = False
+    return _category_clip_model, _category_clip_processor
+
+
+def _clip_forward(model, inputs: Dict):
+    """MarqoFashionCLIP.forward 는 input_ids·pixel_values 만 받음( attention_mask 등 제외 )."""
+    kwargs = {k: inputs[k] for k in ("input_ids", "pixel_values") if k in inputs}
+    return model(**kwargs, return_dict=True)
 
 
 def pil_to_tensor(image: Image.Image) -> torch.Tensor:
     return IMG_TRANSFORM(image.convert("RGB"))
 
 
-def analyze_outfit(images: List[Image.Image]) -> Dict:
+def get_clip_color_score(images: List[Image.Image]) -> float:
+    """FashionCLIP으로 색상 조화도 점수 계산 (0~1)"""
+    clip_m, clip_p = get_clip_model()
+    if not _use_clip or clip_m is None:
+        return 0.5
+
+    device = get_device()
+
+    try:
+        size = 224
+        outfit_img = Image.new("RGB", (size * len(images), size), (255, 255, 255))
+        for i, img in enumerate(images):
+            outfit_img.paste(img.resize((size, size)), (i * size, 0))
+
+        prompts = [
+            "outfit with harmonious matching color tones",
+            "outfit with clashing mismatched colors",
+        ]
+
+        clip_m = clip_m.to(device)
+        inputs = clip_p(
+            text=prompts, images=outfit_img,
+            return_tensors="pt", padding=True
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = _clip_forward(clip_m, inputs)
+            probs   = torch.softmax(outputs.logits_per_image[0], dim=0)
+
+        return float(probs[0])
+
+    except Exception as e:
+        print(f"색상 조화 점수 실패: {e}")
+        return 0.5
+
+
+def analyze_outfit(
+    images: List[Image.Image],
+    accessory_images: Optional[List[Image.Image]] = None,
+) -> Dict:
     """
-    이미지 리스트 → 조화 점수 계산 (새 모델)
-    핵심 공통 함수
+    이미지 리스트 → 조화 점수 계산
+    images: 상의/하의/아우터 등 메인 의류
+    accessory_images: 신발/모자/악세서리 이미지 (색상만 반영)
     """
+    if accessory_images is None:
+        accessory_images = []
+
     model  = get_harmony_model()
     device = get_device()
 
-    # 최대 4개 아이템만 사용 (SetTransformer 입력 길이 고정)
-    images = images[:4]
+    main_images = images[:4]
 
-    tensors = [pil_to_tensor(img) for img in images]
+    tensors = [pil_to_tensor(img) for img in main_images]
     while len(tensors) < 4:
         tensors.append(torch.zeros(3, 224, 224))
 
     imgs_tensor = torch.stack(tensors).unsqueeze(0).to(device)
     mask        = torch.zeros(1, 4).to(device)
-    mask[0, :len(images)] = 1.0
+    mask[0, :len(main_images)] = 1.0
 
     with torch.no_grad():
-        raw = model(imgs_tensor, mask).item()  # (0,1) — score_head 마지막 Sigmoid 출력
+        harmony_raw = model(imgs_tensor, mask).item()
 
-    score_0to100 = round(raw * 100, 1)
+    all_images  = main_images + list(accessory_images)
+    color_score = get_clip_color_score(all_images) if all_images else 0.5
 
-    # CLIP 피드백 생성
-    clip_feedback = generate_clip_feedback(images)
+    final_raw    = harmony_raw * 0.75 + color_score * 0.25
+    score_0to100 = round(final_raw * 100, 1)
 
-    # 기본 reasons
+    clip_feedback = generate_clip_feedback(all_images)
+
     reasons = []
     if score_0to100 >= 80:
         reasons.append("전반적으로 조화로운 코디입니다")
@@ -143,13 +222,13 @@ def analyze_outfit(images: List[Image.Image]) -> Dict:
     else:
         reasons.append("조화가 부족한 조합입니다")
 
-    # CLIP 피드백 추가
     reasons.extend(clip_feedback)
 
     return {
-        "harmony_score": score_0to100,
-        "harmony_sigmoid_raw": raw,
-        "reasons": reasons,
+        "harmony_score":       score_0to100,
+        "harmony_sigmoid_raw": harmony_raw,
+        "color_score":         round(color_score * 100, 1),
+        "reasons":             reasons,
     }
 
 
@@ -207,7 +286,7 @@ def classify_attributes(image: Image.Image) -> Dict:
 
 def generate_clip_feedback(images: List[Image.Image]) -> List[str]:
     """
-    CLIP으로 코디 피드백 생성
+    FashionCLIP으로 코디 피드백 생성
     여러 아이템 이미지를 나란히 붙여서 하나의 코디 이미지로 만든 후
     피드백 텍스트와 유사도 계산
     """
@@ -249,7 +328,7 @@ def generate_clip_feedback(images: List[Image.Image]) -> List[str]:
         inputs  = {k: v.to(device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            outputs = clip_m(**inputs)
+            outputs = _clip_forward(clip_m, inputs)
             probs   = torch.sigmoid(outputs.logits_per_image)[0]
 
         # 임계값 0.5 이상인 것만 피드백으로 선택
@@ -269,15 +348,15 @@ def generate_clip_feedback(images: List[Image.Image]) -> List[str]:
         return feedbacks[:4]  # 최대 4개
 
     except Exception as e:
-        print(f"CLIP 피드백 생성 실패: {e}")
+        print(f"FashionCLIP 피드백 생성 실패: {e}")
         return []
 
 
 def classify_category(image: Image.Image) -> Dict:
     """
-    단일 이미지 → 카테고리 분류 (기존 CLIP)
+    단일 이미지 → 카테고리 분류 (OpenAI CLIP ViT-B/32)
     """
-    clip_m, clip_p = get_clip_model()
+    clip_m, clip_p = get_category_clip_model()
     device = get_device()
 
     clothing_texts = [
@@ -289,7 +368,7 @@ def classify_category(image: Image.Image) -> Dict:
     ]
     category_names = ['상의', '하의', '모자', '신발', '악세서리']
 
-    if _use_clip and clip_m is not None:
+    if _use_category_clip and clip_m is not None:
         try:
             clip_m = clip_m.to(device)
             inputs = clip_p(text=clothing_texts, images=image,
@@ -309,7 +388,7 @@ def classify_category(image: Image.Image) -> Dict:
                 "model_type":       "CLIP"
             }
         except Exception as e:
-            print(f"CLIP 분류 실패: {e}")
+            print(f"CLIP 카테고리 분류 실패: {e}")
 
     # CLIP 실패 시 기본값
     return {
@@ -427,6 +506,7 @@ class PlacedItemRequest(BaseModel):
     texture:  Optional[str]   = None
     pattern:  Optional[str]   = None
     style:    Optional[str]   = None
+    category: Optional[str]   = None
 
 class HarmonyRequest(BaseModel):
     beforeItems: List[PlacedItemRequest]
@@ -492,13 +572,13 @@ async def classify_fashion_attributes(file: UploadFile = File(...)):
 # ===== 카테고리 분류 API =====
 @app.post("/api/classify-clothing-type")
 async def classify_clothing_type(file: UploadFile = File(...)):
-    """카테고리 분류 — 기존 CLIP 사용"""
+    """카테고리 분류 — OpenAI CLIP 사용"""
     try:
         image_data = await file.read()
         image      = Image.open(io.BytesIO(image_data)).convert("RGB")
 
-        # CLIP 먼저 시도
-        get_clip_model()
+        # 카테고리용 CLIP
+        get_category_clip_model()
         result = classify_category(image)
         return {"success": True, **result}
     except Exception as e:
@@ -520,30 +600,46 @@ async def predict_harmony(request: HarmonyRequest):
                 reasons=["Before 아이템이 없어 중립으로 계산"], debug={}
             )
 
-        # 이미지 로드
-        all_imgs = []
-        for item in list(request.beforeItems) + list(request.afterItems):
-            if item.imageUrl:
-                img = load_image_from_url(item.imageUrl)
-                if img:
-                    all_imgs.append(img)
+        main_imgs      = []
+        accessory_imgs = []
+        ACCESSORY_CATEGORIES = ["신발", "모자", "악세서리"]
 
-        if not all_imgs:
+        for item in list(request.beforeItems) + list(request.afterItems):
+            if not item.imageUrl:
+                continue
+            img = load_image_from_url(item.imageUrl)
+            if img is None:
+                continue
+
+            category = item.category if item.category else None
+            if category is None:
+                get_category_clip_model()
+                result   = classify_category(img)
+                category = result.get("clothing_type", "상의")
+
+            if category in ACCESSORY_CATEGORIES:
+                accessory_imgs.append(img)
+            else:
+                main_imgs.append(img)
+
+        if not main_imgs and not accessory_imgs:
             return HarmonyResponse(
                 score_total=50.0, score_color=50.0,
                 score_texture=60.0, score_pattern=70.0, score_style=70.0,
                 reasons=["이미지를 로드할 수 없어 중립으로 계산"], debug={}
             )
 
-        all_imgs = all_imgs[:10]
+        if not main_imgs:
+            main_imgs = accessory_imgs
+            accessory_imgs = []
 
         start_time = time.time()
 
-        result      = analyze_outfit(all_imgs)
+        result      = analyze_outfit(main_imgs, accessory_imgs)
         score_total = result["harmony_score"]
 
         item_attrs = []
-        for img in all_imgs:
+        for img in main_imgs:
             attrs = classify_attributes(img)
             item_attrs.append(attrs)
 
@@ -551,16 +647,18 @@ async def predict_harmony(request: HarmonyRequest):
 
         return HarmonyResponse(
             score_total=score_total,
-            score_color=round(score_total * 0.95, 1),
+            score_color=result["color_score"],
             score_texture=round(score_total * 0.95, 1),
             score_pattern=round(score_total * 0.95, 1),
             score_style=round(score_total * 0.95, 1),
             reasons=result["reasons"],
             debug={
-                "elapsed": elapsed,
-                "item_attrs": item_attrs,
-                "img_count": len(all_imgs),
-                "harmony_sigmoid_raw": result.get("harmony_sigmoid_raw"),
+                "elapsed":             elapsed,
+                "item_attrs":          item_attrs,
+                "main_img_count":      len(main_imgs),
+                "accessory_img_count": len(accessory_imgs),
+                "harmony_raw":         result.get("harmony_sigmoid_raw"),
+                "color_score":         result.get("color_score"),
             }
         )
 

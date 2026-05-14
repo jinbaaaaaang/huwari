@@ -16,6 +16,7 @@ interface HistoryItem {
     texture?: string
     pattern?: string
     style?: string
+    category?: string
   }>
   harmonyScore: {
     score_total: number

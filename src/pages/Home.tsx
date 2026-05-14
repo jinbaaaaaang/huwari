@@ -15,6 +15,7 @@ interface PlacedItem {
   texture?: string
   pattern?: string
   style?: string
+  category?: string
 }
 
 interface HarmonyScore {

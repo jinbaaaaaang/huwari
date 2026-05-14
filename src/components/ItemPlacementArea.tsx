@@ -32,6 +32,7 @@ interface PlacedItem {
   texture?: string
   pattern?: string
   style?: string
+  category?: string
 }
 
 const ItemPlacementArea = ({ 
@@ -176,6 +177,7 @@ const ItemPlacementArea = ({
           y: position.y,      // 가이드 라인 y 위치 (퍼센트)
           width: position.width,   // 가이드 라인 너비
           height: position.height, // 가이드 라인 높이
+          category: clothingType,
         }
 
         // 처리 완료된 아이템을 화면에 추가

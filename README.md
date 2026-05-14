@@ -119,6 +119,8 @@ flowchart TB
     A6 --> R2["대표 색상 추출 결과 반환"]
 ```
 
+> **참고(현재 저장소)**: 위 다이어그램·목록은 **과거 레거시** 기준이다. 지금 `main.py`의 조화 API는 **`POST /api/predict-harmony`** 만이며(FashionHarmony + FashionCLIP), **`/api/harmony-score`는 제공하지 않는다.**
+
 #### 1.2 평가 범위(베이스라인 실험에서 무엇을 봤는가)
 
 | 측면 | 지표(예) |
@@ -161,7 +163,7 @@ flowchart TB
 - **공유 백본·통합 표현**: 속성 로짓과 조화 판단이 같은 특징 흐름을 공유하도록
 - **데이터 기반 정렬**: contrastive / ranking 등으로 “맞는 조합·틀린 조합”을 표현 공간에서 정렬
 - **세트 단위 구조**: attention 기반으로 **아웃핏 전체 상호작용**을 직접 모델링
-- **설명 보강**: 축별 라벨이 없는 한 **CLIP 피드백·총점 구간 문장**으로 사용자 설명을 보완(현재 서비스에 반영)
+- **설명 보강**: 축별 라벨이 없는 한 **FashionCLIP 피드백·총점 구간 문장**으로 사용자 설명을 보완(현재 서비스에 반영)
 
 ---
 
@@ -256,8 +258,8 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 | # | 한계 |
 |---|------|
 | 1 | 스타일은 단일 이미지로 한계 — 전체 코디 맥락 필요 |
-| 2 | 축별 **독립 조화 라벨** 부재 → 세부 조화 점수 **모델 직접 분해** 어려움 → **CLIP 피드백**·총점 구간 문장으로 보완 |
-| 3 | API 호환용 `score_color` 등은 `score_total`의 고정 비율(현재 **0.95**배) — [§5.3](#predict-harmony-api) 참고 |
+| 2 | 축별 **독립 조화 라벨** 부재 → 세부 점수 **모델 직접 분해** 어려움 → **FashionCLIP**(색 조화·`reasons` 문구)과 총점 구간 문장으로 보완, **캔버스 슬롯·카테고리**는 **OpenAI CLIP**(`clip-vit-base-patch32`) |
+| 3 | 세부 점수 스키마: **`score_color`** 는 FashionCLIP 색 점수(0~100), **`score_texture`·`score_pattern`·`score_style`** 는 스키마 호환용 **`score_total`의 0.95배** — [§5.3](#predict-harmony-api) 참고 |
 
 **이 저장소와의 대응**
 
@@ -269,13 +271,13 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 <a id="improved-pipeline"></a>
 ### 5. 현재 서비스: 구현 개요
 
-실험 모델을 **웹에서 쓰는 형태**로 옮긴 것이며, 본 절에서는 **역할 분담과 흐름**만 요약한다. **어떤 입력이 어떤 단계를 거쳐 무엇으로 바뀌는지**만 보려면 [§5.1.1 과정과 산출물](#model-flow-current)을 참고한다. 엔드포인트 목록은 [§5.5](#section-511-rest)에, 구현 세부는 저장소 소스에서 확인할 수 있다.
+실험 모델을 **웹에서 쓰는 형태**로 옮긴 것이며, 본 절에서는 **역할 분담과 흐름**만 요약한다. **어떤 입력이 어떤 단계를 거쳐 무엇으로 바뀌는지**만 보려면 [§5.1.1 과정과 산출물](#model-flow-current)을 참고한다. 엔드포인트 목록은 [§5.6](#section-511-rest)에, 구현 세부는 저장소 소스에서 확인할 수 있다.
 
 #### 5.1 설계 목표
 
-1. 여러 아이템을 한 코디로 보고 **조화 점수(0~100)** 를 낸다.
+1. 여러 아이템을 한 코디로 보고 **조화 점수(0~100)** 를 낸다(FashionHarmony 세트 raw와 FashionCLIP 색 점수를 **75% / 25%**로 합성).
 2. 화면·히스토리용 **재질·패턴·스타일·카테고리**는 **`FashionHarmonyModel.get_attributes`** 로 채운다(한국어 클래스명).
-3. **CLIP**으로 **의류 타입**(상의·하의 등)을 분류하고, 조화 응답의 **`reasons`** 에 코디 문장 유사도 기반 문구를 **선택적으로** 덧붙인다(`generate_clip_feedback`).
+3. **의류 타입(슬롯 배치·요청 `category` 없을 때)** 은 **OpenAI CLIP**(`openai/clip-vit-base-patch32`)으로 분류한다. 조화 API의 **`reasons`** 에는 **FashionCLIP**으로 코디 이미지와 문장 후보를 비교한 피드백을 **선택적으로** 덧붙인다(`generate_clip_feedback`).
 4. **웹캠** 백엔드 경로에서는 **YOLOv8**으로 사람 영역을 찾아 크롭한 뒤 동일 조화 파이프라인을 탄다. **현재 Home UI**는 캡처 한 장을 업로드와 같이 처리한 뒤 **`predict-harmony`** 만 호출한다(§5.2).
 
 스택은 **React·Vite + FastAPI**이며, **히스토리** 저장을 지원한다.
@@ -289,7 +291,7 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 flowchart TB
   subgraph itemOne ["한 장이 들어왔을 때"]
     R["원본 사진"]
-    R --> S1[CLIP으로 슬롯 비교]
+    R --> S1[OpenAI CLIP으로 슬롯 비교]
     S1 --> O1["배치 위치<br/>상의·하의·모자…"]
     R --> S2[배경 제거]
     S2 --> O2["전신 옷만 남은 그림"]
@@ -304,21 +306,21 @@ flowchart TB
     H1 --> P1["조화 점수 하나<br/>0에서 100"]
     M --> H2[장마다 속성 다시 읽기]
     H2 --> P2["항목별 속성 정리<br/>카드·디버그"]
-    M --> H3[코디 그림과 문장 비교]
+    M --> H3[FashionCLIP으로 코디 그림·문장 비교]
     H3 --> P3["짧은 피드백 문장"]
   end
 ```
 
 **한 장**  
-- **CLIP**으로 “상의/하의/…” 후보와 이미지를 맞춰 보면 → **캔버스에 놓일 칸(슬롯)** 이 정해진다.  
+- **OpenAI CLIP**으로 “상의/하의/…” 후보와 이미지를 맞춰 보면 → **캔버스에 놓일 칸(슬롯)** 이 정해진다(프론트는 응답의 `clothing_type`을 **`category`** 로도 저장해 `predict-harmony`에 넘길 수 있다).  
 - **배경 제거**를 거치면 → **옷만 남은 이미지**가 생기고, 그걸로 이후 단계가 이어진다.  
 - **색 군집**을 돌리면 → **대표 색 몇 가지와 비율**이 나와 UI에 **색칩**으로 붙는다.  
 - **통합 패션 모델**이 그 이미지를 읽으면 → **재질·패턴·스타일·종류(한글)** 과 **각각의 확률**이 나와 카드 툴팁 등에 쓰인다.
 
 **여러 장(한 코디)**  
-- **여러 장을 한 세트**로 묶어 보면 → **조화 점수 한 개(0~100)** 가 나온다. 세트 조화에는 **앞에서부터 최대 4장**만 쓰이고, 그보다 많으면 나머지는 이 점수 계산에는 안 들어간다.  
-- 같은 코디에 대해 **장마다 속성을 다시 읽으면** → **항목별 속성 묶음**이 생겨 응답·화면에 붙는다(점수와 별개로, 장 수는 더 많이 처리될 수 있다).  
-- **CLIP**으로 코디 그림과 여러 문장 후보를 비교하면 → **짧은 피드백 문장**이 `reasons`에 덧붙을 수 있다(모델이 없으면 생략).
+- **여러 장을 한 세트**로 묶어 보면 → **조화 점수 한 개(0~100)** 가 나온다. **FashionHarmony** Set 입력에는 **메인 의류 이미지 앞에서 최대 4장**만 쓰이고, **신발·모자·악세서리**는 세트 조화 텐서에는 넣지 않되 **색 조화(FashionCLIP)**·**피드백 문장**에는 메인과 함께 포함된다. 메인이 없고 악세서리만 있으면 서버에서 한쪽으로 합쳐 처리한다.  
+- 같은 코디에 대해 **메인 이미지마다 속성을 읽으면** → **`debug.item_attrs`** 등에 붙는다.  
+- **FashionCLIP**으로 코디 그림(가로 이어붙임)과 여러 문장 후보를 비교하면 → **짧은 피드백 문장**이 `reasons`에 덧붙을 수 있다(모델이 없으면 생략).
 
 | 사용자 입장에서 생기는 것 | 한 줄 설명 |
 |----------------------------|------------|
@@ -333,7 +335,7 @@ flowchart TB
 
 **Home** 화면은 왼쪽에 **코디 작업 영역**, 오른쪽에 **조화 점수·피드백**을 둔다. 입력 방식은 상단에서 **「코디 업로드」** 와 **「웹캠」** 으로 바꿀 수 있으며, 선택 값은 `localStorage`의 `huwari_input_mode`에 저장된다.
 
-**공통**: 캔버스에 올라간 아이템 목록(`beforeItems`)이 바뀔 때마다, 프론트는 약 **400ms 디바운스** 뒤 `POST /api/predict-harmony` 를 호출한다. 요청 본문은 `{ beforeItems, afterItems }` 이며, 현재 구현에서는 **`afterItems`는 빈 배열**로 고정되어 있어 **기준 코디만** 서버에 전달된다. 응답의 `score_total`, `reasons` 등으로 오른쪽 패널(점수·캐릭터 표정·피드백 문장)이 갱신되고, 동일 구성에 대한 결과는 `huwari_harmony_cache`에 시그니처와 함께 캐시된다. 아이템이 하나도 없으면 조화 요청은 보내지 않고 점수 영역을 비운다.
+**공통**: 캔버스에 올라간 아이템 목록(`beforeItems`)이 바뀔 때마다, 프론트는 약 **400ms 디바운스** 뒤 `POST /api/predict-harmony` 를 호출한다. 요청 본문은 `{ beforeItems, afterItems }` 이며, 현재 구현에서는 **`afterItems`는 빈 배열**로 고정되어 있어 **기준 코디만** 서버에 전달된다. 각 아이템에는 가능하면 **`category`**(상의·하의·신발·모자·악세서리)를 실어 보내고, 없으면 서버가 OpenAI CLIP으로 분류한다. 응답의 `score_total`, `reasons` 등으로 오른쪽 패널(점수·캐릭터 표정·피드백 문장)이 갱신되고, 동일 구성에 대한 결과는 `huwari_harmony_cache`에 시그니처와 함께 캐시된다. 아이템이 하나도 없으면 조화 요청은 보내지 않고 점수 영역을 비운다.
 
 **코디 업로드** (`ItemPlacementArea`): 사용자가 파일을 고르면 서버에 **`/api/classify-clothing-type`**(의류 종류)와 **`/api/remove-background`**(배경 제거)를 병렬로 호출한다. 성공 시 종류에 맞는 위치에 **배경이 제거된 이미지(data URL)** 가 캔버스에 놓인다. 이어서 같은 아이템에 대해 비동기로 **`/api/extract-colors`**(대표 색)와 **`/api/classify-fashion-attributes`**(재질·패턴·스타일)를 호출해 카드 정보를 채운다. 사용자는 드래그·리사이즈로 배치를 바꿀 수 있으며, 배치가 바뀌어도 `beforeItems` 객체가 갱신되면 위 디바운스 규칙에 따라 조화가 다시 요청된다.
 
@@ -372,34 +374,41 @@ flowchart TD
 
 <a id="fashion-harmony-arch"></a>
 
-**FashionHarmonyModel**은 EfficientNet-B3 계열 백본, 슬롯별 속성 헤드, Set Transformer로 세트 점수를 낸다. 가중치는 **`models/fashion_harmony_retrained.pt`**, 정의는 **`models/fashion_harmony.py`** 에 있다. 조화 계산 시 **Set 입력은 슬롯 4개(앞쪽 최대 4장)** 에 맞춘다.
+**FashionHarmonyModel**은 EfficientNet-B3 계열 백본, 슬롯별 속성 헤드, Set Transformer로 세트 점수를 낸다. 가중치는 **`models/fashion_harmony_retrained.pt`**, 정의는 **`models/fashion_harmony.py`** 에 있다. 조화 계산 시 **Set 입력은 메인 의류 슬롯 4개(앞에서 최대 4장)** 에 맞춘다. **색상 조화**와 **`reasons` 내 FashionCLIP 피드백**은 별도로 **`Marqo/marqo-fashionCLIP`** 을 쓴다(의존성: `open-clip-torch`, Hugging Face `trust_remote_code` 로딩).
 
 <a id="predict-harmony-api"></a>
-#### 5.3 응답·운용 시 유의사항
+#### 5.3 `predict-harmony` 조화 점수·응답
+
+- **카테고리 분리**: `beforeItems`·`afterItems`를 합쳐 이미지를 로드한 뒤, `category`가 없으면 **OpenAI CLIP**으로 `상의`·`하의`·`모자`·`신발`·`악세서리` 중 하나를 고른다. **신발·모자·악세서리**는 “악세서리 이미지” 목록으로만 색·피드백에 쓰이며, **FashionHarmony** Set 조화 텐서에는 **메인 의류만**(최대 4장) 넣는다. 메인이 비고 악세서리만 있으면 서버가 메인으로 옮겨 처리한다.
+- **총점 `score_total`**: 메인 최대 4장의 **FashionHarmony** raw(0~1)와, 메인+악세서리를 가로로 이은 이미지의 **FashionCLIP 색 점수**(0~1)를 **`harmony_raw × 0.75 + color × 0.25`** 로 합친 뒤 0~100으로 반올림한다.
+- **`score_color`**: 위 FashionCLIP 색 분기의 **퍼센트 값**(0~100 근사). **`score_texture`·`score_pattern`·`score_style`** 은 스키마 호환을 위해 **`score_total`의 약 0.95배**로 채우며, 축별 독립 추정은 아니다.
+- **`reasons`**: 총점 구간 안내 문장 + **`generate_clip_feedback`**(FashionCLIP)에서 나온 문장.
+- **`debug`**: 경과 시간, 메인/악세서리 이미지 수, `harmony_raw`, `color_score`, 메인 이미지별 `classify_attributes` 결과 등.
+
+#### 5.4 응답·운용 시 유의사항
 
 - **기준 코디가 비어 있으면** 중립 점수(50대)와 고정 안내 문구를 반환한다.
-- **`score_color` 등 네 항목**은 스키마 호환을 위해 **`score_total`의 약 0.95배**로 맞춘 값이며, 축별 독립 추정이 아니다.
 - **미리보기 전용** API는 조화 점수 없이 검출·크롭 정보만 반환한다.
 
 UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 수 있다. MTL·버킷 매핑과 K-Fashion 맥락은 [4.2절](#k-fashion-retrain)을 참고한다.
 
-#### 5.4 부가 기능·로컬 실행
+#### 5.5 부가 기능·로컬 실행
 
 **배경 제거**, **대표 색 추출**, **히스토리**는 필요 시 별도 API로 쓴다. 히스토리는 **서버 메모리**에 두며 재시작 시 비워진다. 로컬 개발 시 프론트는 보통 **3000**, 백엔드는 **8000** 포트이며, Vite가 `/api` 를 FastAPI로 넘긴다.
 
 <a id="section-511-rest"></a>
-#### 5.5 주요 HTTP 엔드포인트
+#### 5.6 주요 HTTP 엔드포인트
 
 | 기능 | HTTP 경로 | 비고 |
 |------|-----------|------|
-| 조화·이미지별 속성(캔버스) | `POST /api/predict-harmony` | before/after URL·data URL |
+| 조화·이미지별 속성(캔버스) | `POST /api/predict-harmony` | before/after URL·data URL, 아이템별 선택 필드 **`category`** |
 | 웹캠 조화·크롭 속성 | `POST /api/webcam-harmony` | multipart 1장 |
 | 웹캠 미리보기(검출만) | `POST /api/detect-clothing` | 조화 없음 |
 | 속성만 | `POST /api/classify-fashion-attributes` | 1장 |
 | 의류 타입만 | `POST /api/classify-clothing-type` | 1장 |
 | 배경 제거·색·히스토리 | `remove-background`, `extract-colors`, `save-history`, `get-history`, `delete-history/{id}` | 히스토리는 메모리 |
 
-**요약**: **`FashionHarmonyModel`** 이 세트 조화 점수와 **아이템 속성(한국어)** 을 담당하고, **CLIP**은 **의류 타입** 분류와 **`predict-harmony`의 `reasons` 보강**에 쓰인다. **YOLOv8**은 **`webcam-harmony`**·**`detect-clothing`** 등에서 사람 검출·크롭에 쓰인다.
+**요약**: **`FashionHarmonyModel`** 이 메인 의류 세트의 조화 raw와 **아이템 속성(한국어)** 을 담당한다. **OpenAI CLIP**(`clip-vit-base-patch32`)은 **의류 타입(슬롯·`predict-harmony`에서 `category` 추론)** 에 쓰이고, **FashionCLIP**(`Marqo/marqo-fashionCLIP`)은 **색 조화 점수**·**`reasons` 피드백 문구**에 쓰인다. **YOLOv8**은 **`webcam-harmony`**·**`detect-clothing`** 등에서 사람 검출·크롭에 쓰인다.
 
 ---
 
@@ -419,23 +428,18 @@ UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 �
   - 결과는 PNG 형태로 반환되어 전/후 비교나 레이아웃 합성에 활용할 수 있다.
 - **대표 색상 추출 및 시각화**
   - 각 아이템에서 주요 색상 팔레트를 추출하고 비율(percentage) 정보를 함께 제공한다.
-  - 추출된 색상은 조화 점수 계산과 UI 상의 색상 요약 카드에 활용된다.
+  - 추출된 색상은 UI 상의 색상 요약 카드에 활용한다. **조화 총점의 색 가지**는 별도로 FashionCLIP으로 코디 이미지를 보고 계산한다([§5.3](#predict-harmony-api)).
 - **조화 점수 예측(핵심)**
-  - before(기준 코디)와 after(추천/후보 아이템) 관계를 바탕으로 조화 점수를 계산한다.
+  - `POST /api/predict-harmony`가 before(및 선택 after) 아이템 이미지를 받아 조화를 계산한다.
   - 출력 항목:
-    - 총점(`score_total`)
-    - 세부 점수(`score_color`, `score_texture`, `score_pattern`, `score_style`)
-    - 해석 문장(`reasons`) 및 디버그 정보(`debug`)
-  - 상황에 따라 이미지 기반 ranker와 규칙 기반 스코어링 로직이 폴백 구조로 동작한다.
-- **패션 속성 분류(MTL)**
-  - Multi-Task Learning 모델로 아래 3개 태스크를 동시에 예측한다.
-    - 재질(Material / Texture)
-    - 패턴(Pattern)
-    - 스타일(Style)
-  - 학습용 세부 클래스를 사용자 표시용 카테고리로 매핑해 직관적으로 제공한다.
-- **의류 타입 분류**
-  - 상의/하의/모자/신발/악세서리 카테고리를 자동 분류한다.
-  - CLIP 기반 분류를 우선 사용하고, 실패 시 ImageNet 계열 분류 모델로 자동 폴백한다.
+    - 총점(`score_total`): FashionHarmony 세트 raw와 FashionCLIP 색 점수를 **75% / 25%**로 합성한 0~100 점수.
+    - 세부 점수: `score_color`(FashionCLIP 색), `score_texture`·`score_pattern`·`score_style`(스키마 호환용으로 `score_total`의 약 0.95배).
+    - 해석 문장(`reasons`) 및 디버그 정보(`debug`).
+- **패션 속성 분류(통합 모델)**
+  - **`FashionHarmonyModel`**의 속성 헤드로 재질·패턴·스타일·카테고리(한국어 클래스)를 예측한다(`POST /api/classify-fashion-attributes`).
+- **의류 타입 분류(슬롯용)**
+  - 상의/하의/모자/신발/악세서리를 **OpenAI CLIP**(`clip-vit-base-patch32`)으로 분류한다(`POST /api/classify-clothing-type`).
+  - 로드 실패·오류 시 응답은 `clothing_type` 기본값 등으로 폴백할 수 있으며, **ImageNet 계열 보조 분류기는 현재 `main.py`에 연결되어 있지 않다.**
 - **사람 영역 감지 기반 보조 신호**
   - YOLO를 활용해 인물 포함 여부 및 박스 기반 비율 정보를 추출한다.
   - 분류 결과 보정 또는 후처리 조건 판단에 보조 신호로 사용된다.
@@ -450,7 +454,7 @@ UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 �
 
 - Frontend: React, Vite, TypeScript, Tailwind CSS, React Router
 - Backend: FastAPI, Uvicorn
-- ML/CV: PyTorch, torchvision, timm, transformers, ultralytics(YOLO), rembg, scikit-learn
+- ML/CV: PyTorch, torchvision, timm, transformers, **open-clip-torch**(FashionCLIP), ultralytics(YOLO), rembg, scikit-learn
 
 ## 프로젝트 구조
 
@@ -460,11 +464,11 @@ huwari/
 │  ├─ components/
 │  └─ pages/
 ├─ main.py                 # FastAPI 서버 및 API 엔드포인트
-├─ harmony.py              # 규칙 기반 조화 점수 계산 로직
+├─ harmony.py              # 규칙 기반 조화(레거시 참고, 현재 `main.py` 조화 API와 무관)
 ├─ models/
 │  ├─ fashion_harmony.py    # FashionHarmonyModel (백본+속성헤드+Set Transformer)
 │  ├─ harmony_ranker.py    # MHAttentionRanker + EfficientNet-B0 임베딩(레거시)
-│  └─ fashion_mtl.py       # 재질/패턴/스타일 MTL 모델(API 속성용)
+│  └─ fashion_mtl.py       # 재질/패턴/스타일 MTL(과거 실험·참고용, 현재 속성 API는 FashionHarmony)
 ├─ requirements.txt        # Python 의존성
 ├─ package.json            # Node 의존성 및 스크립트
 └─ vite.config.ts          # 프론트 dev 서버(3000) + /api 프록시(8000)
@@ -475,7 +479,6 @@ huwari/
 - `GET /api/hello`
 - `POST /api/remove-background`
 - `POST /api/extract-colors`
-- `POST /api/harmony-score`
 - `POST /api/classify-fashion-attributes`
 - `POST /api/classify-clothing-type`
 - `POST /api/predict-harmony`
@@ -496,4 +499,6 @@ huwari/
   - Multi-Task Learning으로 3개 태스크를 동시에 예측한다(과거 실험·참고용).
   - 태스크: 재질(Material), 패턴(Pattern), 스타일(Style) — **현재 FastAPI 경로에서는 로드하지 않는다.**
 - `main.py`
-  - 의류 타입 분류 시 CLIP을 우선 시도하고 실패 시 ImageNet 기반 분류기로 폴백한다.
+  - **카테고리(슬롯·`predict-harmony` 보조)**: OpenAI **`clip-vit-base-patch32`**.
+  - **색 조화·`reasons` FashionCLIP 문구**: **`Marqo/marqo-fashionCLIP`** (`open_clip` + Hugging Face `trust_remote_code`).
+  - 조화 세트 점수·속성: **`FashionHarmonyModel`** + `fashion_harmony_retrained.pt`.
