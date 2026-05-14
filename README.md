@@ -261,24 +261,73 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 
 **이 저장소와의 대응**
 
-- **조화 점수**: `FashionHarmonyModel` + `fashion_harmony_final.pt` — 통합 속성 헤드는 코드상 **카테고리 5 · 재질 12 · 패턴 13 · 스타일 10** (`models/fashion_harmony.py`).
-- **아이템 속성(UI·히스토리)**: 별도 **`FashionMTLModel`** (`fashion_mtl_model.pt`, **97·70·8** 로짓) + `main.py` 표시 버킷. 연구 스토리의 “K-Fashion 축소”는 **통합 조화 모델 쪽 학습·타깃**과 함께 이해하면 된다.
+- **조화·아이템 속성(한국어 클래스)**: 동일 **`FashionHarmonyModel`** + 체크포인트 **`models/fashion_harmony_retrained.pt`**. 속성 헤드 차원은 **`models/fashion_harmony.py`** 기준 **카테고리 5 · 재질 8 · 패턴 9 · 스타일 10**(속성 벡터 32차원 결합 후 Set 입력).
+- **레거시 `FashionMTLModel`**(`models/fashion_mtl.py`)는 과거 실험·참고용으로 남아 있으며, **현재 `main.py` API 경로에서는 로드하지 않는다.**
 
 ---
 
 <a id="improved-pipeline"></a>
 ### 5. 현재 서비스: 구현 개요
 
-실험 모델을 **웹에서 쓰는 형태**로 옮긴 것이며, 본 절에서는 **역할 분담과 흐름**만 요약한다. 엔드포인트 목록은 [§5.5](#section-511-rest)에, 구현 세부는 저장소 소스에서 확인할 수 있다.
+실험 모델을 **웹에서 쓰는 형태**로 옮긴 것이며, 본 절에서는 **역할 분담과 흐름**만 요약한다. **어떤 입력이 어떤 단계를 거쳐 무엇으로 바뀌는지**만 보려면 [§5.1.1 과정과 산출물](#model-flow-current)을 참고한다. 엔드포인트 목록은 [§5.5](#section-511-rest)에, 구현 세부는 저장소 소스에서 확인할 수 있다.
 
 #### 5.1 설계 목표
 
 1. 여러 아이템을 한 코디로 보고 **조화 점수(0~100)** 를 낸다.
-2. 화면·히스토리용 **재질·패턴·스타일**은 **`FashionMTLModel`** (`fashion_mtl_model.pt`)로 채운다.
-3. **CLIP**으로 코디 패널과 짧은 설명을 맞춰 본 뒤, 한국어 **`reasons`** 를 덧붙인다.
-4. **웹캠**으로 프레임을 넣을 수 있다. 백엔드에는 **YOLO**로 상·하의 크롭까지 포함한 **`webcam-harmony`** 가 있으나, **현재 Home UI**는 캡처한 한 장을 업로드와 동일하게 **의류 분류·배경 제거** 후 캔버스에 올리고 **`predict-harmony`** 로 조화를 본다(§5.2).
+2. 화면·히스토리용 **재질·패턴·스타일·카테고리**는 **`FashionHarmonyModel.get_attributes`** 로 채운다(한국어 클래스명).
+3. **CLIP**으로 **의류 타입**(상의·하의 등)을 분류하고, 조화 응답의 **`reasons`** 에 코디 문장 유사도 기반 문구를 **선택적으로** 덧붙인다(`generate_clip_feedback`).
+4. **웹캠** 백엔드 경로에서는 **YOLOv8**으로 사람 영역을 찾아 크롭한 뒤 동일 조화 파이프라인을 탄다. **현재 Home UI**는 캡처 한 장을 업로드와 같이 처리한 뒤 **`predict-harmony`** 만 호출한다(§5.2).
 
 스택은 **React·Vite + FastAPI**이며, **히스토리** 저장을 지원한다.
+
+<a id="model-flow-current"></a>
+#### 5.1.1 과정과 산출물
+
+사용자가 올린 **한 장**과, 캔버스에 쌓인 **여러 장(한 코디)** 을 나누어 본다. 아래는 **「무슨 일을 하면 → 화면·응답에 무엇이 생기는지」** 만 정리한 것이다. (웹캠 전용 백엔드는 먼저 **사람 찾기·크롭**이 붙고, 그 다음은 아래 **여러 장**과 같은 종류의 결과를 만든다.)
+
+```mermaid
+flowchart TB
+  subgraph itemOne ["한 장이 들어왔을 때"]
+    R["원본 사진"]
+    R --> S1[CLIP으로 슬롯 비교]
+    S1 --> O1["배치 위치<br/>상의·하의·모자…"]
+    R --> S2[배경 제거]
+    S2 --> O2["전신 옷만 남은 그림"]
+    O2 --> S3[픽셀을 몇 덩어리로 묶어 색 뽑기]
+    S3 --> O3["대표 색과 비율"]
+    O2 --> S4[패션 모델로 속성 읽기]
+    S4 --> O4["재질·패턴·스타일·종류<br/>+ 얼마나 확신하는지"]
+  end
+  subgraph outfitMany ["여러 장이 모였을 때"]
+    M["캔버스에 올라간 옷들"]
+    M --> H1[한 코디로 묶어 조화 보기]
+    H1 --> P1["조화 점수 하나<br/>0에서 100"]
+    M --> H2[장마다 속성 다시 읽기]
+    H2 --> P2["항목별 속성 정리<br/>카드·디버그"]
+    M --> H3[코디 그림과 문장 비교]
+    H3 --> P3["짧은 피드백 문장"]
+  end
+```
+
+**한 장**  
+- **CLIP**으로 “상의/하의/…” 후보와 이미지를 맞춰 보면 → **캔버스에 놓일 칸(슬롯)** 이 정해진다.  
+- **배경 제거**를 거치면 → **옷만 남은 이미지**가 생기고, 그걸로 이후 단계가 이어진다.  
+- **색 군집**을 돌리면 → **대표 색 몇 가지와 비율**이 나와 UI에 **색칩**으로 붙는다.  
+- **통합 패션 모델**이 그 이미지를 읽으면 → **재질·패턴·스타일·종류(한글)** 과 **각각의 확률**이 나와 카드 툴팁 등에 쓰인다.
+
+**여러 장(한 코디)**  
+- **여러 장을 한 세트**로 묶어 보면 → **조화 점수 한 개(0~100)** 가 나온다. 세트 조화에는 **앞에서부터 최대 4장**만 쓰이고, 그보다 많으면 나머지는 이 점수 계산에는 안 들어간다.  
+- 같은 코디에 대해 **장마다 속성을 다시 읽으면** → **항목별 속성 묶음**이 생겨 응답·화면에 붙는다(점수와 별개로, 장 수는 더 많이 처리될 수 있다).  
+- **CLIP**으로 코디 그림과 여러 문장 후보를 비교하면 → **짧은 피드백 문장**이 `reasons`에 덧붙을 수 있다(모델이 없으면 생략).
+
+| 사용자 입장에서 생기는 것 | 한 줄 설명 |
+|----------------------------|------------|
+| 슬롯 | 어디 칸에 붙일지 |
+| 전경 이미지 | 배경 없는 옷만 |
+| 색 요약 | 대표 색·비율 |
+| 속성 카드 | 재질·패턴·스타일·종류 |
+| 조화 점수 | 코디 전체 한 점수 |
+| 피드백 문장 | 이유·느낌 한두 줄 |
 
 #### 5.2 런타임 흐름 (UI·서버)
 
@@ -323,7 +372,7 @@ flowchart TD
 
 <a id="fashion-harmony-arch"></a>
 
-**FashionHarmonyModel**은 EfficientNet-B3 계열 백본, 슬롯별 속성, Set Transformer로 세트 점수를 낸다. 가중치는 `models/fashion_harmony_final.pt`, 정의는 **`models/fashion_harmony.py`** 에 있다. **조화 입력은 슬롯 4개(앞쪽 4장)** 에 맞추고, 그 이상 올린 장은 **점수에는 반영되지 않을 수 있으나** 장별 MTL은 계속할 수 있다.
+**FashionHarmonyModel**은 EfficientNet-B3 계열 백본, 슬롯별 속성 헤드, Set Transformer로 세트 점수를 낸다. 가중치는 **`models/fashion_harmony_retrained.pt`**, 정의는 **`models/fashion_harmony.py`** 에 있다. 조화 계산 시 **Set 입력은 슬롯 4개(앞쪽 최대 4장)** 에 맞춘다.
 
 <a id="predict-harmony-api"></a>
 #### 5.3 응답·운용 시 유의사항
@@ -350,7 +399,7 @@ UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 �
 | 의류 타입만 | `POST /api/classify-clothing-type` | 1장 |
 | 배경 제거·색·히스토리 | `remove-background`, `extract-colors`, `save-history`, `get-history`, `delete-history/{id}` | 히스토리는 메모리 |
 
-**요약**: **FashionHarmonyModel**이 세트 조화 점수를, **FashionMTLModel**이 아이템 속성을, **CLIP**이 의류 타입·피드백 문장을 담당한다. **YOLO**는 의류 타입 API의 보조 신호 및 **`webcam-harmony`** 등 백엔드 웹캠 경로에서 사용된다.
+**요약**: **`FashionHarmonyModel`** 이 세트 조화 점수와 **아이템 속성(한국어)** 을 담당하고, **CLIP**은 **의류 타입** 분류와 **`predict-harmony`의 `reasons` 보강**에 쓰인다. **YOLOv8**은 **`webcam-harmony`**·**`detect-clothing`** 등에서 사람 검출·크롭에 쓰인다.
 
 ---
 
@@ -438,13 +487,13 @@ huwari/
 
 ## 모델 구성 메모
 
-- `models/fashion_harmony.py` (서비스 조화 점수 기본)
+- `models/fashion_harmony.py` (서비스 조화·속성 기본)
   - `FashionHarmonyModel`: EfficientNet-B3 백본 + 속성 헤드 + Set Transformer.
-  - 체크포인트 `fashion_harmony_final.pt` — 배경·실험·구현은 [HUWARI 연구·개발 스토리](#research-journey) 절을 본다.
+  - 체크포인트 **`fashion_harmony_retrained.pt`** (`main.py`의 `HARMONY_CKPT`). 배경·실험·구현은 [HUWARI 연구·개발 스토리](#research-journey) 절을 본다.
 - `models/harmony_ranker.py`
   - 레거시 `MHAttentionRanker` + `EfficientNet-B0` 임베딩 경로(베이스라인·비교 실험용으로 위 스토리 절에 기록됨).
 - `models/fashion_mtl.py`
-  - Multi-Task Learning으로 3개 태스크를 동시에 예측한다.
-  - 태스크: 재질(Material), 패턴(Pattern), 스타일(Style)
+  - Multi-Task Learning으로 3개 태스크를 동시에 예측한다(과거 실험·참고용).
+  - 태스크: 재질(Material), 패턴(Pattern), 스타일(Style) — **현재 FastAPI 경로에서는 로드하지 않는다.**
 - `main.py`
   - 의류 타입 분류 시 CLIP을 우선 시도하고 실패 시 ImageNet 기반 분류기로 폴백한다.
