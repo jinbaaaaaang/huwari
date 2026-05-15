@@ -45,6 +45,7 @@ HUWARI는 "지금 가진 옷 조합이 잘 어울리는지"를 빠르게 확인�
 먼저 **당시 HUWARI 레거시(모듈 분절) 파이프라인**을 구조·수치로 고정해 **어디가 병목인지**를 밝히고, 그 **문제를 해결할 방향을 찾기 위해 선행연구**를 살펴보았다. 이어서 도출한 **개선 원칙**을 **FashionHarmony·K-Fashion 실험**으로 옮기고, 마지막에 **지금 저장소의 서비스**로 구현한 과정을 한 흐름으로 묶었다.
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F6D1DD','primaryTextColor':'#3E2723','primaryBorderColor':'#C9A8A0','lineColor':'#A1887F','secondaryColor':'#F9E8ED','tertiaryColor':'#FDF5F8','background':'#FDF5F8','mainBkg':'#F6D1DD','clusterBkg':'#F9E8ED','clusterBorder':'#C9A8A0','edgeLabelBackground':'#FDF5F8','fontFamily':'inherit'}}}%%
 flowchart LR
   S1["1. 베이스라인·정량화"] --> S2["2. 한계·개선 원칙"]
   S2 --> S3["3. 선행연구 맥락"]
@@ -64,6 +65,7 @@ flowchart LR
 레거시 시스템은 하나의 거대한 순차 파이프라인이라기보다, **요청 목적별로 모델이 갈라지는 API 구조**였다. 조화·속성·의류 타입·전처리가 각각 분리되어 있었고, 이는 곧 **표현 공간이 통합되지 않음**을 의미한다.
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F6D1DD','primaryTextColor':'#3E2723','primaryBorderColor':'#C9A8A0','lineColor':'#A1887F','secondaryColor':'#F9E8ED','tertiaryColor':'#FDF5F8','background':'#FDF5F8','mainBkg':'#F6D1DD','clusterBkg':'#F9E8ED','clusterBorder':'#C9A8A0','edgeLabelBackground':'#FDF5F8','fontFamily':'inherit'}}}%%
 flowchart LR
   subgraph legacy ["레거시 모듈(개념)"]
     CLIP1[CLIP<br/>카테고리]
@@ -87,6 +89,7 @@ flowchart LR
 엔드포인트별 호출 흐름은 아래와 같이 정리할 수 있다.
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F6D1DD','primaryTextColor':'#3E2723','primaryBorderColor':'#C9A8A0','lineColor':'#A1887F','secondaryColor':'#F9E8ED','tertiaryColor':'#FDF5F8','background':'#FDF5F8','mainBkg':'#F6D1DD','clusterBkg':'#F9E8ED','clusterBorder':'#C9A8A0','edgeLabelBackground':'#FDF5F8','fontFamily':'inherit'}}}%%
 flowchart TB
     U["Client / Frontend"] --> A1["POST /api/predict-harmony"]
     U --> A2["POST /api/harmony-score"]
@@ -288,6 +291,7 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 사용자가 올린 **한 장**과, 캔버스에 쌓인 **여러 장(한 코디)** 을 나누어 본다. 아래는 **「무슨 일을 하면 → 화면·응답에 무엇이 생기는지」** 만 정리한 것이다. (웹캠 전용 백엔드는 먼저 **사람 찾기·크롭**이 붙고, 그 다음은 아래 **여러 장**과 같은 종류의 결과를 만든다.)
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F6D1DD','primaryTextColor':'#3E2723','primaryBorderColor':'#C9A8A0','lineColor':'#A1887F','secondaryColor':'#F9E8ED','tertiaryColor':'#FDF5F8','background':'#FDF5F8','mainBkg':'#F6D1DD','clusterBkg':'#F9E8ED','clusterBorder':'#C9A8A0','edgeLabelBackground':'#FDF5F8','fontFamily':'inherit'}}}%%
 flowchart TB
   subgraph itemOne ["한 장이 들어왔을 때"]
     R["원본 사진"]
@@ -344,6 +348,7 @@ flowchart TB
 백엔드에는 전신 프레임에서 사람을 찾아 상·하의로 나눈 뒤 조화까지 한 번에 처리하는 **`POST /api/webcam-harmony`** 도 있으나, **현재 `Home.tsx` 프론트는 이 경로를 호출하지 않는다.** (API 목록·다른 클라이언트용으로 유지된다.)
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F6D1DD','primaryTextColor':'#3E2723','primaryBorderColor':'#C9A8A0','lineColor':'#A1887F','secondaryColor':'#F9E8ED','tertiaryColor':'#FDF5F8','background':'#FDF5F8','mainBkg':'#F6D1DD','clusterBkg':'#F9E8ED','clusterBorder':'#C9A8A0','edgeLabelBackground':'#FDF5F8','fontFamily':'inherit'}}}%%
 flowchart TD
   subgraph step_input ["입력"]
     UP["코디 업로드: 파일 선택"]
@@ -432,6 +437,7 @@ HUWARI는 조화 **점수만 숫자로 주는 것**이 아니라, **왜 그렇�
 `POST /api/predict-harmony` 응답 직전에, 최종 `score_total`을 기준으로 `reasons`를 **다시 조립**한다(속성 수정·룰북 병합 반영).
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F6D1DD','primaryTextColor':'#3E2723','primaryBorderColor':'#C9A8A0','lineColor':'#A1887F','secondaryColor':'#F9E8ED','tertiaryColor':'#FDF5F8','background':'#FDF5F8','mainBkg':'#F6D1DD','clusterBkg':'#F9E8ED','clusterBorder':'#C9A8A0','edgeLabelBackground':'#FDF5F8','fontFamily':'inherit'}}}%%
 flowchart TB
   FH[FashionHarmonyModel<br/>조화 raw + 속성 헤드]
   ATN[get_attention_weights<br/>Set Transformer 1레이어]
