@@ -164,7 +164,12 @@ const Info = () => {
         <div className="col-span-12 border-b border-secondary">
           <div className="p-8">
             <div className="text-center mb-8">
-              <div className="inline-block mb-4">
+              <div className="inline-flex items-center justify-center gap-3 mb-4">
+                <img
+                  src="/assets/normal_gini.svg"
+                  alt="Gini"
+                  className="w-14 h-14"
+                />
                 <h3 className="text-2xl font-light text-secondary inline-block px-4 py-2 border border-secondary rounded-full">
                   HUWARI
                 </h3>
