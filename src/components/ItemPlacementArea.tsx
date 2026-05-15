@@ -1,5 +1,10 @@
 import { useRef, useState, useEffect, useMemo } from 'react'
-import { OUTFIT_GUIDE, accessoryLeftOccupied } from '../constants/outfitGuide'
+import {
+  OUTFIT_GUIDE,
+  accessoryLeftOccupied,
+  inferCategoryFromCanvasPosition,
+  isAccessoryCategory,
+} from '../constants/outfitGuide'
 
 interface ItemPlacementAreaProps {
   buttonText: string
@@ -55,7 +60,21 @@ const ItemPlacementArea = ({
   // initialItems를 문자열로 직렬화하여 비교
   const initialItemsKey = useMemo(() => {
     if (!initialItems || initialItems.length === 0) return 'empty'
-    return JSON.stringify(initialItems.map(item => item.id).sort())
+    return JSON.stringify(
+      [...initialItems]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((item) => ({
+          id: item.id,
+          texture: item.texture,
+          pattern: item.pattern,
+          style: item.style,
+          category: item.category,
+          x: item.x,
+          y: item.y,
+          width: item.width,
+          height: item.height,
+        }))
+    )
   }, [initialItems])
 
   const prevInitialItemsKeyRef = useRef<string>(initialItemsKey)
@@ -186,11 +205,12 @@ const ItemPlacementArea = ({
         // 처리 중 카운트 감소
         setProcessingCount(prev => Math.max(0, prev - 1))
 
-        // 배경 제거와 위치 판별 완료 후 색상 추출 및 질감/패턴/스타일 분석 (비동기)
-        Promise.all([
-          extractColorsAsync(bgData.image, newItem.id),
-          analyzeFashionAttributesAsync(file, newItem.id)
-        ]).catch(error => {
+        // 배경 제거 후: 색은 항상. 재질·패턴·스타일은 신발/모자/악세서리가 아닐 때만 요청
+        const postTasks: Promise<void>[] = [extractColorsAsync(bgData.image, newItem.id)]
+        if (!isAccessoryCategory(clothingType)) {
+          postTasks.push(analyzeFashionAttributesAsync(file, newItem.id))
+        }
+        Promise.all(postTasks).catch(error => {
           console.error('후처리 작업 오류:', error)
         })
       } else {
@@ -425,6 +445,17 @@ const ItemPlacementArea = ({
   }
 
   const handleMouseUp = () => {
+    const endedId = draggingItem
+    if (endedId && containerRef.current) {
+      const { width: cw, height: ch } = containerRef.current.getBoundingClientRect()
+      setPlacedItems((prev) => {
+        const item = prev.find((i) => i.id === endedId)
+        if (!item) return prev
+        const inferred = inferCategoryFromCanvasPosition(item, cw, ch)
+        if (!inferred || inferred === item.category) return prev
+        return prev.map((i) => (i.id === endedId ? { ...i, category: inferred } : i))
+      })
+    }
     setDraggingItem(null)
     setDragOffset({ x: 0, y: 0 })
   }
@@ -683,7 +714,11 @@ const ItemPlacementArea = ({
         {placedItems.map((item) => (
           <div
             key={item.id}
-            className="absolute z-20 cursor-move group"
+            className={`absolute cursor-move group ${
+              draggingItem === item.id || resizingItem === item.id
+                ? 'z-[110]'
+                : 'z-20 hover:z-[100]'
+            }`}
             style={{
               left: `${item.x}%`,
               top: `${item.y}%`,
@@ -729,42 +764,47 @@ const ItemPlacementArea = ({
             )}
             
             {/* 추출된 색상 및 속성 표시 (오른쪽 중앙) */}
-            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 opacity-0 group-hover:opacity-100 transition-opacity z-20 bg-[#FAFAF8] backdrop-blur-sm rounded-lg p-2 shadow-lg border border-secondary min-w-[120px]">
-              {/* 색상 표시 */}
+            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 opacity-0 group-hover:opacity-100 transition-opacity z-10 bg-[#FAFAF8] backdrop-blur-sm rounded-lg p-2 shadow-lg border border-secondary min-w-[120px] flex flex-col items-center gap-1.5">
+              {/* 색상 표시 — w-full + justify-center 로 팝업 너비 기준 가운데 정렬 */}
               {item.colors && item.colors.length > 0 && (
-                <div className="flex gap-1 justify-center mb-2">
+                <div className="flex w-full justify-center gap-1">
                   {item.colors.slice(0, 5).map((color, idx) => (
                     <div
                       key={idx}
-                      className="w-4 h-4 rounded-full border border-secondary shadow-sm"
+                      className="w-4 h-4 rounded-full border border-secondary shadow-sm shrink-0"
                       style={{ backgroundColor: color.hex }}
                       title={`${color.hex} (${color.percentage.toFixed(1)}%)`}
                     />
                   ))}
                 </div>
               )}
-              
-              {/* 질감, 패턴, 스타일 표시 */}
-              <div className="space-y-1 text-xs">
-                {item.texture && (
-                  <div className="text-secondary">
-                    <span className="text-secondary">재질:</span> {item.texture}
-                  </div>
-                )}
-                {item.pattern && (
-                  <div className="text-secondary">
-                    <span className="text-secondary">패턴:</span> {item.pattern}
-                  </div>
-                )}
-                {item.style && (
-                  <div className="text-secondary">
-                    <span className="text-secondary">스타일:</span> {item.style}
-                  </div>
-                )}
-                {(!item.texture && !item.pattern && !item.style) && (
-                  <div className="text-secondary text-[10px]">분석 중...</div>
-                )}
-              </div>
+
+              {isAccessoryCategory(item.category) ? (
+                (!item.colors || item.colors.length === 0) && (
+                  <div className="text-secondary text-[10px] w-full text-center">색 추출 중...</div>
+                )
+              ) : (
+                <div className="space-y-1 text-xs w-full text-left">
+                  {item.texture && (
+                    <div className="text-secondary">
+                      <span className="text-secondary">재질:</span> {item.texture}
+                    </div>
+                  )}
+                  {item.pattern && (
+                    <div className="text-secondary">
+                      <span className="text-secondary">패턴:</span> {item.pattern}
+                    </div>
+                  )}
+                  {item.style && (
+                    <div className="text-secondary">
+                      <span className="text-secondary">스타일:</span> {item.style}
+                    </div>
+                  )}
+                  {(!item.texture && !item.pattern && !item.style) && (
+                    <div className="text-secondary text-[10px]">분석 중...</div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         ))}

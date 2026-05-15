@@ -17,6 +17,9 @@ from pathlib import Path
 import re
 import time
 
+from harmony import calculate_harmony_score
+from harmony_label_bridge import placed_item_to_rulebook_dict
+
 # ===== 통합 조화도 모델 (속성 + 조화 점수) =====
 from models.fashion_harmony import (
     load_harmony_model,
@@ -102,7 +105,9 @@ def get_clip_model():
                 FASHION_CLIP_MODEL_ID, trust_remote_code=True
             )
             _clip_model = AutoModel.from_pretrained(
-                FASHION_CLIP_MODEL_ID, trust_remote_code=True
+                FASHION_CLIP_MODEL_ID,
+                trust_remote_code=True,
+                low_cpu_mem_usage=False,
             )
             _clip_model.eval()
             _use_clip = True
@@ -207,8 +212,16 @@ def analyze_outfit(
     all_images  = main_images + list(accessory_images)
     color_score = get_clip_color_score(all_images) if all_images else 0.5
 
-    final_raw    = harmony_raw * 0.75 + color_score * 0.25
+    # FashionCLIP 미로드·실패 시 color_score 는 0.5(중립)인데, 그대로 25% 섞으면 총점이 항상 눌림(예: 87대)
+    if not _use_clip:
+        final_raw = harmony_raw
+    else:
+        final_raw = harmony_raw * 0.75 + color_score * 0.25
     score_0to100 = round(final_raw * 100, 1)
+
+    # 메인 1장 + 악세서리 없음: 세트 비교 대상이 없으므로 총점은 만점(비교·하이브리드 미적용)
+    if len(main_images) == 1 and len(accessory_images) == 0:
+        score_0to100 = 100.0
 
     clip_feedback = generate_clip_feedback(all_images)
 
@@ -227,7 +240,7 @@ def analyze_outfit(
     return {
         "harmony_score":       score_0to100,
         "harmony_sigmoid_raw": harmony_raw,
-        "color_score":         round(color_score * 100, 1),
+        "color_score":         round(color_score * 100, 1) if _use_clip else round(harmony_raw * 100, 1),
         "reasons":             reasons,
     }
 
@@ -534,6 +547,25 @@ class HistorySaveResponse(BaseModel):
     error:     Optional[str] = None
 
 
+def _merge_model_rule_reasons(
+    model_reasons: List[str],
+    rule_reasons: List[str],
+    max_n: int = 6,
+) -> List[str]:
+    out: List[str] = []
+    for r in model_reasons or []:
+        if r and r not in out:
+            out.append(r)
+        if len(out) >= max_n:
+            return out
+    for r in rule_reasons or []:
+        if r and r not in out:
+            out.append(r)
+        if len(out) >= max_n:
+            break
+    return out
+
+
 def load_image_from_url(image_url: str) -> Optional[Image.Image]:
     if not image_url:
         return None
@@ -600,27 +632,61 @@ async def predict_harmony(request: HarmonyRequest):
                 reasons=["Before 아이템이 없어 중립으로 계산"], debug={}
             )
 
-        main_imgs      = []
-        accessory_imgs = []
+        main_imgs          = []
+        accessory_imgs     = []
+        before_rule_items  = []
+        after_rule_items   = []
+        request_attrs_main = []  # main 이미지 순서와 동일 — 요청에 담긴 재질·패턴·스타일(수정 반영)
         ACCESSORY_CATEGORIES = ["신발", "모자", "악세서리"]
 
-        for item in list(request.beforeItems) + list(request.afterItems):
+        def resolve_category(item: PlacedItemRequest, img: Image.Image) -> str:
+            if item.category:
+                return item.category
+            get_category_clip_model()
+            r = classify_category(img)
+            return r.get("clothing_type", "상의")
+
+        for item in request.beforeItems:
             if not item.imageUrl:
                 continue
             img = load_image_from_url(item.imageUrl)
             if img is None:
                 continue
-
-            category = item.category if item.category else None
-            if category is None:
-                get_category_clip_model()
-                result   = classify_category(img)
-                category = result.get("clothing_type", "상의")
-
+            category = resolve_category(item, img)
             if category in ACCESSORY_CATEGORIES:
                 accessory_imgs.append(img)
             else:
                 main_imgs.append(img)
+                before_rule_items.append(placed_item_to_rulebook_dict(item))
+                request_attrs_main.append(
+                    {
+                        "texture": item.texture,
+                        "pattern": item.pattern,
+                        "style":   item.style,
+                        "category": category,
+                    }
+                )
+
+        for item in request.afterItems:
+            if not item.imageUrl:
+                continue
+            img = load_image_from_url(item.imageUrl)
+            if img is None:
+                continue
+            category = resolve_category(item, img)
+            if category in ACCESSORY_CATEGORIES:
+                accessory_imgs.append(img)
+            else:
+                main_imgs.append(img)
+                after_rule_items.append(placed_item_to_rulebook_dict(item))
+                request_attrs_main.append(
+                    {
+                        "texture": item.texture,
+                        "pattern": item.pattern,
+                        "style":   item.style,
+                        "category": category,
+                    }
+                )
 
         if not main_imgs and not accessory_imgs:
             return HarmonyResponse(
@@ -635,30 +701,52 @@ async def predict_harmony(request: HarmonyRequest):
 
         start_time = time.time()
 
-        result      = analyze_outfit(main_imgs, accessory_imgs)
-        score_total = result["harmony_score"]
+        result       = analyze_outfit(main_imgs, accessory_imgs)
+        model_total  = float(result["harmony_score"])
 
         item_attrs = []
         for img in main_imgs:
             attrs = classify_attributes(img)
             item_attrs.append(attrs)
 
+        rule_result = None
+        if before_rule_items:
+            rule_result = calculate_harmony_score(before_rule_items, after_rule_items)
+
+        if rule_result is not None:
+            score_total = round(0.5 * model_total + 0.5 * float(rule_result["score_total"]), 1)
+            score_color = float(rule_result["score_color"])
+            score_texture = float(rule_result["score_texture"])
+            score_pattern = float(rule_result["score_pattern"])
+            score_style = float(rule_result["score_style"])
+            reasons = _merge_model_rule_reasons(result.get("reasons") or [], rule_result.get("reasons") or [])
+        else:
+            score_total = model_total
+            score_color = float(result["color_score"])
+            score_texture = round(model_total * 0.95, 1)
+            score_pattern = round(model_total * 0.95, 1)
+            score_style = round(model_total * 0.95, 1)
+            reasons = result.get("reasons") or []
+
         elapsed = time.time() - start_time
 
         return HarmonyResponse(
             score_total=score_total,
-            score_color=result["color_score"],
-            score_texture=round(score_total * 0.95, 1),
-            score_pattern=round(score_total * 0.95, 1),
-            score_style=round(score_total * 0.95, 1),
-            reasons=result["reasons"],
+            score_color=score_color,
+            score_texture=score_texture,
+            score_pattern=score_pattern,
+            score_style=score_style,
+            reasons=reasons,
             debug={
                 "elapsed":             elapsed,
                 "item_attrs":          item_attrs,
+                "request_attrs_main":  request_attrs_main,
                 "main_img_count":      len(main_imgs),
                 "accessory_img_count": len(accessory_imgs),
                 "harmony_raw":         result.get("harmony_sigmoid_raw"),
                 "color_score":         result.get("color_score"),
+                "model_score_total":   model_total,
+                "rulebook_score":      rule_result,
             }
         )
 

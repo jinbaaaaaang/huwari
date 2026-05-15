@@ -2,7 +2,13 @@ import { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Layout from '../components/Layout'
 import ItemPlacementArea from '../components/ItemPlacementArea'
-import { OUTFIT_GUIDE, accessoryLeftOccupied } from '../constants/outfitGuide'
+import CustomSelect from '../components/CustomSelect'
+import {
+  MATERIAL_CLASS_OPTIONS,
+  PATTERN_CLASS_OPTIONS,
+  STYLE_CLASS_OPTIONS,
+} from '../constants/fashionClassOptions'
+import { OUTFIT_GUIDE, accessoryLeftOccupied, isAccessoryCategory } from '../constants/outfitGuide'
 
 interface PlacedItem {
   id: string
@@ -33,8 +39,27 @@ const LS_LOAD_HISTORY = 'loadHistoryItems'
 const LS_HARMONY_CACHE = 'huwari_harmony_cache'
 const LS_INPUT_MODE = 'huwari_input_mode'
 
+/** 조화 캐시 키 — id만 쓰면 이미지·종류가 바뀌어도 예전 점수가 계속 맞는 것처럼 남을 수 있음 */
+function fingerprintImageUrl(url: string): string {
+  if (!url) return '0'
+  const len = url.length
+  const head = url.slice(0, 48)
+  const tail = len > 96 ? url.slice(-48) : ''
+  return `${len}:${head}:${tail}`
+}
+
 function itemSignature(items: PlacedItem[]) {
-  return [...items].map((i) => i.id).sort().join('\0')
+  return [...items]
+    .map((i) => {
+      const fp = fingerprintImageUrl(i.imageUrl ?? '')
+      const cat = i.category ?? ''
+      const tex = i.texture ?? ''
+      const pat = i.pattern ?? ''
+      const sty = i.style ?? ''
+      return `${i.id}:${cat}:${tex}:${pat}:${sty}:${fp}`
+    })
+    .sort()
+    .join('\0')
 }
 
 function readHarmonyCacheForItems(items: PlacedItem[]): HarmonyScore | null {
@@ -87,9 +112,13 @@ function Home() {
     }
     return 'upload'
   })
-  const [beforeItems, setBeforeItems] = useState<PlacedItem[]>(readInitialBeforeItemsFromStorage)
+  const [beforeItems, setBeforeItems] = useState<PlacedItem[]>(() => readInitialBeforeItemsFromStorage())
   const [afterItems] = useState<PlacedItem[]>([])
-  const [harmonyScore, setHarmonyScore] = useState<HarmonyScore | null>(null)
+  const [harmonyScore, setHarmonyScore] = useState<HarmonyScore | null>(() => {
+    const items = readInitialBeforeItemsFromStorage()
+    if (items.length === 0) return null
+    return readHarmonyCacheForItems(items)
+  })
   const [isLoadingHarmony, setIsLoadingHarmony] = useState(false)
   const [isCameraOn, setIsCameraOn] = useState(false)
   const [isCapturing, setIsCapturing] = useState(false)
@@ -155,15 +184,6 @@ function Home() {
     }
   }, [beforeItems])
 
-  // lazy 초기화로만 아이템이 채워진 경우(LS 복원) 조화 캐시 복원
-  useEffect(() => {
-    if (beforeItems.length === 0) return
-    setHarmonyScore((prev) => {
-      if (prev != null) return prev
-      return readHarmonyCacheForItems(beforeItems) ?? prev
-    })
-  }, [beforeItems])
-
   useEffect(() => {
     if (!harmonyScore) return
     const items = beforeItemsRef.current
@@ -181,14 +201,14 @@ function Home() {
     }
   }, [harmonyScore])
 
-  // Before 아이템들의 질감, 패턴, 스타일 정보 종합
+  // Before 아이템들의 질감, 패턴, 스타일 정보 종합 (신발·모자·악세서리는 제외 — 색만 사용)
   const beforeFashionAttributes = useMemo(() => {
     const textures: string[] = []
     const patterns: string[] = []
     const styles: string[] = []
-    
-    // Before 아이템들의 속성 수집
+
     beforeItems.forEach(item => {
+      if (isAccessoryCategory(item.category)) return
       if (item.texture) textures.push(item.texture)
       if (item.pattern) patterns.push(item.pattern)
       if (item.style) styles.push(item.style)
@@ -218,6 +238,26 @@ function Home() {
       allStyles: getAllUnique(styles)
     }
   }, [beforeItems])
+
+  /** 캔버스가 전부 신발·모자·악세서리일 때 — 우측 분석 패널에서 재질·패턴·스타일 블록 숨김 */
+  const accessoryOnlyOutfit = useMemo(
+    () =>
+      beforeItems.length > 0 &&
+      beforeItems.every((i) => isAccessoryCategory(i.category)),
+    [beforeItems]
+  )
+
+  const beforeMainItemsForEdit = useMemo(
+    () => beforeItems.filter((it) => !isAccessoryCategory(it.category)),
+    [beforeItems]
+  )
+
+  const patchBeforeItemAttr = (
+    id: string,
+    patch: Partial<Pick<PlacedItem, 'texture' | 'pattern' | 'style'>>
+  ) => {
+    setBeforeItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)))
+  }
 
   // Before 아이템들의 색상을 종합하여 상위 5개 선택
   const beforeTopColors = useMemo(() => {
@@ -509,13 +549,15 @@ function Home() {
         y: position.y,
         width: position.width,
         height: position.height,
+        category: clothingType,
       }
 
       setBeforeItems(prev => [...prev, newItem])
-      Promise.all([
-        extractColorsAsync(bgData.image, itemId),
-        analyzeFashionAttributesAsync(captureFile, itemId)
-      ]).catch(error => console.error('웹캠 후처리 오류:', error))
+      const postTasks: Promise<void>[] = [extractColorsAsync(bgData.image, itemId)]
+      if (!isAccessoryCategory(clothingType)) {
+        postTasks.push(analyzeFashionAttributesAsync(captureFile, itemId))
+      }
+      Promise.all(postTasks).catch(error => console.error('웹캠 후처리 오류:', error))
     } catch (error) {
       console.error('웹캠 캡처 오류:', error)
       setWebcamError('캡처 처리 중 오류가 발생했습니다. 다시 시도해주세요.')
@@ -646,7 +688,7 @@ function Home() {
             {/* 분석 결과 */}
             <div className="bg-[#FAFAF8] p-4 border-t border-secondary h-[260px] overflow-y-auto scrollbar-thin shrink-0">
               <h4 className="text-xs font-regular text-secondary mb-4 uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">분석 결과</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid gap-3 ${accessoryOnlyOutfit ? 'grid-cols-1' : 'grid-cols-2'}`}>
                 <div className="bg-[#FAFAF8] p-3 flex flex-col">
                   <div className="text-xs text-secondary mb-2 uppercase tracking-wider">색상</div>
                   <div className="flex space-x-1 flex-wrap gap-1 min-h-[16px] items-center">
@@ -664,6 +706,8 @@ function Home() {
                     )}
                   </div>
                 </div>
+                {!accessoryOnlyOutfit && (
+                  <>
                 <div className="bg-[#FAFAF8] p-3 flex flex-col">
                   <div className="text-xs text-secondary mb-2 uppercase tracking-wider">재질</div>
                   <div className="flex flex-wrap gap-1 min-h-[28px] items-center">
@@ -727,6 +771,54 @@ function Home() {
                     )}
                   </div>
                 </div>
+                {beforeMainItemsForEdit.length > 0 && (
+                  <div className="col-span-2 border-t border-secondary/50 pt-3 mt-1 space-y-2.5">
+                    <div className="text-[10px] text-secondary uppercase tracking-wider">
+                      속성 수정 · 선택 시 점수 자동 재계산
+                    </div>
+                    {beforeMainItemsForEdit.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex flex-wrap items-center gap-x-2 gap-y-2 border border-secondary/40 rounded-lg p-2 bg-[#FAFAF8]/80"
+                      >
+                        <div className="flex items-center gap-2 shrink-0">
+                          {item.imageUrl ? (
+                            <img
+                              src={item.imageUrl}
+                              alt=""
+                              className="w-9 h-9 object-contain rounded border border-secondary/30 bg-white/50"
+                            />
+                          ) : null}
+                          <span className="text-[10px] text-secondary max-w-[4.5rem] truncate">
+                            {item.category ?? '의류'}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5 flex-1 min-w-0 justify-end sm:justify-start">
+                          <CustomSelect
+                            options={MATERIAL_CLASS_OPTIONS}
+                            value={item.texture ?? ''}
+                            onChange={(v) => patchBeforeItemAttr(item.id, { texture: v })}
+                            placeholder="재질"
+                          />
+                          <CustomSelect
+                            options={PATTERN_CLASS_OPTIONS}
+                            value={item.pattern ?? ''}
+                            onChange={(v) => patchBeforeItemAttr(item.id, { pattern: v })}
+                            placeholder="패턴"
+                          />
+                          <CustomSelect
+                            options={STYLE_CLASS_OPTIONS}
+                            value={item.style ?? ''}
+                            onChange={(v) => patchBeforeItemAttr(item.id, { style: v })}
+                            placeholder="스타일"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                  </>
+                )}
               </div>
             </div>
           </div>
