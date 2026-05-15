@@ -34,6 +34,21 @@ interface HarmonyScore {
   debug: any
 }
 
+interface WebcamCropItem {
+  category: string
+  imageBase64: string | null
+}
+
+interface WebcamHarmonyResponse {
+  success: boolean
+  harmony_score?: number
+  harmony_sigmoid_raw?: number
+  color_score?: number
+  reasons?: string[]
+  crop_items?: WebcamCropItem[]
+  error?: string
+}
+
 const LS_ITEMS = 'currentItems'
 const LS_LOAD_HISTORY = 'loadHistoryItems'
 const LS_HARMONY_CACHE = 'huwari_harmony_cache'
@@ -112,6 +127,9 @@ function readInitialBeforeItemsFromStorage(): PlacedItem[] {
 /** 피드백 패널에 기본으로 보이는 기니피그(행) 개수 */
 const FEEDBACK_MIN_ROWS = 4
 
+/** 웹캠 실시간 조화 분석 주기 (ms) */
+const WEBCAM_LIVE_INTERVAL_MS = 5000
+
 function Home() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -135,9 +153,18 @@ function Home() {
   const [isCameraOn, setIsCameraOn] = useState(false)
   const [isCapturing, setIsCapturing] = useState(false)
   const [webcamError, setWebcamError] = useState('')
+  const [webcamLiveScore, setWebcamLiveScore] = useState<number | null>(null)
+  const [webcamVideoReady, setWebcamVideoReady] = useState(false)
+  const [isWebcamLiveLoading, setIsWebcamLiveLoading] = useState(false)
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null)
   const webcamStreamRef = useRef<MediaStream | null>(null)
+  const webcamIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const webcamAnalyzingRef = useRef(false)
+  const isCameraOnRef = useRef(false)
+  const inputModeRef = useRef(inputMode)
+  inputModeRef.current = inputMode
+  isCameraOnRef.current = isCameraOn
   const beforeItemsRef = useRef<PlacedItem[]>([])
   beforeItemsRef.current = beforeItems
 
@@ -330,7 +357,44 @@ function Home() {
   const prevHarmonyInputSigRef = useRef<string | null>(null)
   const prevCompositionSigRef = useRef<string | null>(null)
 
+  const isWebcamLiveActive = inputMode === 'webcam' && isCameraOn
+  /** 카메라 ON 동안 항상 표시할 상태 문구 (null이면 점수 줄만 표시) */
+  const webcamStatusMessage = useMemo(() => {
+    if (!isWebcamLiveActive) return ''
+    if (!webcamVideoReady) return '카메라 화면을 준비하는 중입니다…'
+    if (isWebcamLiveLoading) return '실시간 코디를 분석하는 중입니다… (수 초 걸릴 수 있어요)'
+    if (webcamLiveScore == null) return '실시간 분석을 시작합니다…'
+    return ''
+  }, [isWebcamLiveActive, webcamVideoReady, isWebcamLiveLoading, webcamLiveScore])
+
   const feedbackRows = useMemo(() => {
+    if (inputMode === 'webcam') {
+      if (!isCameraOn) {
+        return Array.from({ length: FEEDBACK_MIN_ROWS }, (_, i) => ({
+          id: `webcam-hint-${i}`,
+          text: i === 0 ? '카메라를 켜면 실시간 조화 분석이 시작됩니다.' : null,
+        }))
+      }
+      const reasons = harmonyScore?.reasons ?? []
+      if (reasons.length > 0) {
+        const n = Math.max(FEEDBACK_MIN_ROWS, reasons.length)
+        return Array.from({ length: n }, (_, i) => ({
+          id: `webcam-reason-${i}-${reasons[i] ?? 'empty'}`,
+          text: reasons[i] ?? null,
+        }))
+      }
+      if (isWebcamLiveLoading) {
+        return Array.from({ length: FEEDBACK_MIN_ROWS }, (_, i) => ({
+          id: `webcam-loading-${i}`,
+          text: i === 0 ? '실시간 코디를 분석하는 중입니다…' : null,
+        }))
+      }
+      const hint = webcamStatusMessage || '실시간 코디를 분석하는 중입니다…'
+      return Array.from({ length: FEEDBACK_MIN_ROWS }, (_, i) => ({
+        id: `webcam-hint-${i}`,
+        text: i === 0 ? hint : null,
+      }))
+    }
     if (isLoadingHarmony) {
       return Array.from({ length: FEEDBACK_MIN_ROWS }, (_, i) => ({
         id: `loading-${i}`,
@@ -352,7 +416,14 @@ function Home() {
       id: `reason-${i}-${reasons[i] ?? 'empty'}`,
       text: reasons[i] ?? null,
     }))
-  }, [isLoadingHarmony, harmonyScore?.reasons])
+  }, [
+    isLoadingHarmony,
+    isWebcamLiveLoading,
+    harmonyScore?.reasons,
+    webcamStatusMessage,
+    inputMode,
+    isCameraOn,
+  ])
 
   // 조화 점수·피드백 API (debounce) — 아이템 추가·삭제·속성 변경 시 재생성
   useEffect(() => {
@@ -363,7 +434,9 @@ function Home() {
     if (beforeItems.length === 0) {
       prevHarmonyInputSigRef.current = null
       prevCompositionSigRef.current = null
-      setHarmonyScore(null)
+      if (inputMode !== 'webcam' || !isCameraOn) {
+        setHarmonyScore(null)
+      }
       setIsLoadingHarmony(false)
       return
     }
@@ -426,7 +499,7 @@ function Home() {
         clearTimeout(debounceTimerRef.current)
       }
     }
-  }, [beforeItems.length, itemCompositionSig, harmonyInputSig, afterItems])
+  }, [beforeItems.length, itemCompositionSig, harmonyInputSig, afterItems, inputMode, isCameraOn])
 
   // 조화 상태 영역 전용: 점수 구간별 표정 (0~39 화남, 40~69 보통, 70~100 행복). 피드백 줄 기니는 항상 normal.
   const harmonyGiniMood = useMemo((): 'neutral' | 'angry' | 'normal' | 'happy' => {
@@ -457,7 +530,16 @@ function Home() {
         ? 'animate-harmony-gini-angry'
         : 'animate-harmony-gini'
 
+  const clearWebcamInterval = () => {
+    if (webcamIntervalRef.current) {
+      clearInterval(webcamIntervalRef.current)
+      webcamIntervalRef.current = null
+    }
+  }
+
   const stopWebcam = () => {
+    clearWebcamInterval()
+    webcamAnalyzingRef.current = false
     if (webcamStreamRef.current) {
       webcamStreamRef.current.getTracks().forEach(track => track.stop())
       webcamStreamRef.current = null
@@ -466,11 +548,141 @@ function Home() {
       webcamVideoRef.current.srcObject = null
     }
     setIsCameraOn(false)
+    setWebcamLiveScore(null)
+    setWebcamVideoReady(false)
+    setIsWebcamLiveLoading(false)
+  }
+
+  const waitForVideoFrames = (video: HTMLVideoElement) =>
+    new Promise<void>(resolve => {
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        resolve()
+        return
+      }
+      let settled = false
+      const done = () => {
+        if (settled || video.videoWidth === 0) return
+        settled = true
+        video.removeEventListener('loadeddata', done)
+        video.removeEventListener('loadedmetadata', done)
+        resolve()
+      }
+      video.addEventListener('loadeddata', done)
+      video.addEventListener('loadedmetadata', done)
+      window.setTimeout(() => {
+        if (!settled) {
+          settled = true
+          video.removeEventListener('loadeddata', done)
+          video.removeEventListener('loadedmetadata', done)
+          resolve()
+        }
+      }, 4000)
+    })
+
+  const startWebcamLiveInterval = () => {
+    if (webcamIntervalRef.current) return
+    clearWebcamInterval()
+    void runLiveWebcamAnalysis()
+    webcamIntervalRef.current = setInterval(() => {
+      void runLiveWebcamAnalysis()
+    }, WEBCAM_LIVE_INTERVAL_MS)
+  }
+
+  const onWebcamVideoReady = () => {
+    setWebcamVideoReady(true)
+    if (inputModeRef.current === 'webcam' && isCameraOnRef.current) {
+      startWebcamLiveInterval()
+    }
+  }
+
+  const captureWebcamFrameBlob = async (): Promise<Blob | null> => {
+    const video = webcamVideoRef.current
+    if (!video || !isCameraOnRef.current) return null
+    if (video.readyState < 2 || video.videoWidth === 0) return null
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 1280
+    canvas.height = video.videoHeight || 720
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85))
+  }
+
+  const dataUrlToFile = (dataUrl: string, filename: string): File | null => {
+    if (!dataUrl.includes(',')) return null
+    const [header, b64] = dataUrl.split(',')
+    const mime = header.match(/data:([^;]+)/)?.[1] ?? 'image/png'
+    const byteCharacters = atob(b64)
+    const byteNumbers = new Array(byteCharacters.length)
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i)
+    }
+    return new File([new Uint8Array(byteNumbers)], filename, { type: mime })
+  }
+
+  const applyWebcamHarmonyToScore = (data: WebcamHarmonyResponse) => {
+    if (data.harmony_score == null) return
+    const total = data.harmony_score
+    const color = data.color_score ?? total
+    setWebcamLiveScore(Math.round(total))
+    setHarmonyScore(prev => ({
+      score_total: total,
+      score_color: color,
+      score_texture: prev?.score_texture ?? total,
+      score_pattern: prev?.score_pattern ?? total,
+      score_style: prev?.score_style ?? total,
+      reasons: data.reasons ?? [],
+      debug: { source: 'webcam-harmony' },
+    }))
+  }
+
+  const callWebcamHarmony = async (blob: Blob): Promise<WebcamHarmonyResponse | null> => {
+    const file = new File([blob], `webcam-${Date.now()}.jpg`, { type: 'image/jpeg' })
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await fetch('/api/webcam-harmony', { method: 'POST', body: formData })
+    if (!response.ok) return null
+    return response.json() as Promise<WebcamHarmonyResponse>
+  }
+
+  const runLiveWebcamAnalysis = async () => {
+    if (
+      webcamAnalyzingRef.current ||
+      !isCameraOnRef.current ||
+      inputModeRef.current !== 'webcam'
+    ) {
+      return
+    }
+    webcamAnalyzingRef.current = true
+    setIsWebcamLiveLoading(true)
+    try {
+      const blob = await captureWebcamFrameBlob()
+      if (!blob) {
+        setWebcamError('카메라 프레임을 읽지 못했습니다. 잠시 후 다시 시도합니다.')
+        return
+      }
+
+      const data = await callWebcamHarmony(blob)
+      if (!data?.success) {
+        setWebcamError(data?.error || '실시간 분석에 실패했습니다.')
+        return
+      }
+      setWebcamError('')
+      applyWebcamHarmonyToScore(data)
+    } catch (error) {
+      console.error('웹캠 실시간 분석 오류:', error)
+      setWebcamError('서버에 연결할 수 없습니다. 백엔드(8000)가 실행 중인지 확인해주세요.')
+    } finally {
+      webcamAnalyzingRef.current = false
+      setIsWebcamLiveLoading(false)
+    }
   }
 
   const startWebcam = async () => {
     try {
       setWebcamError('')
+      setWebcamVideoReady(false)
+      setWebcamLiveScore(null)
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user' },
         audio: false
@@ -576,57 +788,72 @@ function Home() {
       setIsCapturing(true)
       setWebcamError('')
 
-      const video = webcamVideoRef.current
-      const canvas = document.createElement('canvas')
-      canvas.width = video.videoWidth || 1280
-      canvas.height = video.videoHeight || 720
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('캔버스 컨텍스트 생성 실패')
-
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95))
+      const blob = await captureWebcamFrameBlob()
       if (!blob) throw new Error('캡처 이미지 생성 실패')
-      const captureFile = new File([blob], `webcam-${Date.now()}.jpg`, { type: 'image/jpeg' })
 
-      const classifyFormData = new FormData()
-      classifyFormData.append('file', captureFile)
-      const bgFormData = new FormData()
-      bgFormData.append('file', captureFile)
-
-      const [classifyResponse, bgResponse] = await Promise.all([
-        fetch('/api/classify-clothing-type', { method: 'POST', body: classifyFormData }),
-        fetch('/api/remove-background', { method: 'POST', body: bgFormData })
-      ])
-
-      if (!classifyResponse.ok || !bgResponse.ok) {
-        throw new Error('웹캠 이미지 분석 API 호출 실패')
+      const data = await callWebcamHarmony(blob)
+      if (!data?.success) {
+        throw new Error(data?.error || '웹캠 분석 실패')
       }
 
-      const classifyData = await classifyResponse.json()
-      const bgData = await bgResponse.json()
-      if (!classifyData.success || !bgData.success || !bgData.image) {
-        throw new Error(classifyData.error || bgData.error || '분석 실패')
+      applyWebcamHarmonyToScore(data)
+
+      const crops = (data.crop_items ?? []).filter(
+        (c): c is WebcamCropItem & { imageBase64: string } =>
+          Boolean(c.imageBase64) && c.category !== '전체',
+      )
+      if (crops.length === 0) {
+        throw new Error('인식된 의류 영역이 없습니다.')
       }
 
-      const clothingType = classifyData.clothing_type || '악세서리'
-      const itemId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      const position = getPositionByClothingType(clothingType, beforeItems)
-      const newItem: PlacedItem = {
-        id: itemId,
-        imageUrl: bgData.image,
-        x: position.x,
-        y: position.y,
-        width: position.width,
-        height: position.height,
-        category: clothingType,
+      let acc = [...beforeItemsRef.current]
+      const newItems: PlacedItem[] = []
+
+      for (const crop of crops) {
+        const cropFile = dataUrlToFile(
+          crop.imageBase64,
+          `webcam-${crop.category}-${Date.now()}.png`,
+        )
+        if (!cropFile) continue
+
+        const bgFormData = new FormData()
+        bgFormData.append('file', cropFile)
+        const bgResponse = await fetch('/api/remove-background', {
+          method: 'POST',
+          body: bgFormData,
+        })
+        if (!bgResponse.ok) continue
+
+        const bgData = await bgResponse.json()
+        if (!bgData.success || !bgData.image) continue
+
+        const clothingType = crop.category
+        const itemId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const position = getPositionByClothingType(clothingType, acc)
+        const newItem: PlacedItem = {
+          id: itemId,
+          imageUrl: bgData.image,
+          x: position.x,
+          y: position.y,
+          width: position.width,
+          height: position.height,
+          category: clothingType,
+        }
+        acc = [...acc, newItem]
+        newItems.push(newItem)
+
+        const postTasks: Promise<void>[] = [extractColorsAsync(bgData.image, itemId)]
+        if (!isAccessoryCategory(clothingType)) {
+          postTasks.push(analyzeFashionAttributesAsync(cropFile, itemId))
+        }
+        Promise.all(postTasks).catch(error => console.error('웹캠 후처리 오류:', error))
       }
 
-      setBeforeItems(prev => [...prev, newItem])
-      const postTasks: Promise<void>[] = [extractColorsAsync(bgData.image, itemId)]
-      if (!isAccessoryCategory(clothingType)) {
-        postTasks.push(analyzeFashionAttributesAsync(captureFile, itemId))
+      if (newItems.length === 0) {
+        throw new Error('아이템 추가에 실패했습니다.')
       }
-      Promise.all(postTasks).catch(error => console.error('웹캠 후처리 오류:', error))
+
+      setBeforeItems(acc)
     } catch (error) {
       console.error('웹캠 캡처 오류:', error)
       setWebcamError('캡처 처리 중 오류가 발생했습니다. 다시 시도해주세요.')
@@ -642,18 +869,34 @@ function Home() {
   }, [inputMode])
 
   useEffect(() => {
+    if (!isCameraOn || inputMode !== 'webcam') {
+      clearWebcamInterval()
+      if (!isCameraOn) {
+        setWebcamLiveScore(null)
+        setWebcamVideoReady(false)
+      }
+      return
+    }
+    return () => clearWebcamInterval()
+  }, [isCameraOn, inputMode])
+
+  useEffect(() => {
     const attachStreamToVideo = async () => {
       if (!isCameraOn || !webcamVideoRef.current || !webcamStreamRef.current) return
       try {
-        webcamVideoRef.current.srcObject = webcamStreamRef.current
-        await webcamVideoRef.current.play()
+        setWebcamError('')
+        const video = webcamVideoRef.current
+        video.srcObject = webcamStreamRef.current
+        await video.play()
+        await waitForVideoFrames(video)
+        onWebcamVideoReady()
       } catch (error) {
         console.error('웹캠 비디오 재생 오류:', error)
         setWebcamError('웹캠 화면 재생에 실패했습니다. 다시 시도해주세요.')
       }
     }
     attachStreamToVideo()
-  }, [isCameraOn])
+  }, [isCameraOn, inputMode])
 
   useEffect(() => {
     return () => stopWebcam()
@@ -707,18 +950,19 @@ function Home() {
                     initialItems={beforeItems}
                   />
                 ) : (
-                  <div className="h-full p-6 flex flex-col">
-                    <div className="flex-1 border border-secondary rounded-2xl flex flex-col items-center justify-center gap-4">
+                  <div className="h-full min-h-0 p-6 flex flex-col gap-3">
+                    <div className="flex-1 min-h-0 border border-secondary rounded-2xl overflow-hidden bg-[#FAFAF8] relative">
                       {isCameraOn ? (
                         <video
                           ref={webcamVideoRef}
                           autoPlay
                           playsInline
                           muted
-                          className="w-full h-full object-contain rounded-2xl -scale-x-100"
+                          onLoadedData={onWebcamVideoReady}
+                          className="absolute inset-0 w-full h-full object-cover -scale-x-100"
                         />
                       ) : (
-                        <>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-4">
                           <div className="w-16 h-16 rounded-full border border-secondary flex items-center justify-center">
                             <svg className="w-7 h-7 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5a2.5 2.5 0 012.5-2.5h7a2.5 2.5 0 012.5 2.5v1.2l3.4-2.3A1 1 0 0120 7.2v9.6a1 1 0 01-1.6.8L15 15.3v1.2a2.5 2.5 0 01-2.5 2.5h-7A2.5 2.5 0 013 16.5v-9z" />
@@ -728,13 +972,31 @@ function Home() {
                             카메라를 켜면 실시간 화면이 표시됩니다.<br />
                             캡처한 이미지는 코디 업로드 영역에 자동 반영됩니다.
                           </p>
-                        </>
+                        </div>
                       )}
                     </div>
-                    {webcamError && (
-                      <p className="mt-3 text-xs text-red-500 text-center">{webcamError}</p>
-                    )}
-                    <div className="mt-4 grid grid-cols-2 gap-2">
+                    <div
+                      id="webcam-live-status"
+                      className="shrink-0 py-2 text-center text-sm leading-relaxed text-secondary"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {!isCameraOn ? (
+                        <p>카메라를 켜면 실시간 조화 분석이 시작됩니다.</p>
+                      ) : (
+                        <>
+                          <p>{webcamStatusMessage || '분석 중…'}</p>
+                          <p className="mt-1 font-medium">
+                            실시간 조화도:{' '}
+                            {webcamLiveScore != null ? `${webcamLiveScore}점` : '—'}
+                          </p>
+                        </>
+                      )}
+                      {webcamError ? (
+                        <p className="mt-1 text-xs text-red-600">{webcamError}</p>
+                      ) : null}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 shrink-0">
                       <button
                         onClick={isCameraOn ? stopWebcam : startWebcam}
                         className="px-4 py-2 border border-secondary rounded-full text-xs text-secondary uppercase tracking-wider hover:bg-secondary hover:text-cream transition-all"
@@ -959,8 +1221,12 @@ function Home() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
                     <div className="w-28 h-28 bg-secondary flex items-center justify-center rounded-full mb-2">
-                      {isLoadingHarmony ? (
-                        <div className="text-sm text-cream">계산 중...</div>
+                      {isLoadingHarmony || (inputMode === 'webcam' && isWebcamLiveLoading && webcamLiveScore == null) ? (
+                        <div className="text-sm text-cream text-center">계산 중...</div>
+                      ) : inputMode === 'webcam' && isWebcamLiveActive && webcamLiveScore == null && webcamStatusMessage ? (
+                        <div className="text-xs text-cream text-center leading-snug px-1">
+                          준비 중
+                        </div>
                       ) : (
                         <div className="text-4xl font-light text-cream">
                           {harmonyScore ? Math.round(harmonyScore.score_total) : '-'}

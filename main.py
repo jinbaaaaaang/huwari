@@ -1268,11 +1268,12 @@ async def predict_harmony(request: HarmonyRequest):
         raise e
 
 
-# ===== 웹캠 조화 분석 API (새로 추가) =====
+# ===== 웹캠 조화 분석 API =====
 @app.post("/api/webcam-harmony")
 async def webcam_harmony(file: UploadFile = File(...)):
     """
-    웹캠 캡처 → YOLOv8 사람 탐지 → 크롭 → 조화 분석
+    웹캠 캡처 → YOLOv8 사람 탐지 → 상의/하의/신발 크롭
+    → 각각 아이템으로 반환 + 조화 분석
     """
     try:
         image_data = await file.read()
@@ -1282,8 +1283,9 @@ async def webcam_harmony(file: UploadFile = File(...)):
         yolo    = get_yolo_model()
         results = yolo(image_np, classes=[0])
 
-        cropped_imgs = []
-        detections   = []
+        cropped_imgs  = []
+        crop_items    = []
+        detections    = []
 
         for result in results:
             for box in result.boxes:
@@ -1294,55 +1296,70 @@ async def webcam_harmony(file: UploadFile = File(...)):
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 ph = y2 - y1
 
-                top_crop = image.crop((
-                    int(x1), int(y1 + ph * 0.20),
-                    int(x2), int(y1 + ph * 0.55)
-                ))
-                bot_crop = image.crop((
-                    int(x1), int(y1 + ph * 0.50),
-                    int(x2), int(y1 + ph * 0.90)
-                ))
+                crops = [
+                    ("상의", image.crop((int(x1), int(y1 + ph * 0.10), int(x2), int(y1 + ph * 0.50)))),
+                    ("하의", image.crop((int(x1), int(y1 + ph * 0.45), int(x2), int(y1 + ph * 0.80)))),
+                    ("신발", image.crop((int(x1), int(y1 + ph * 0.75), int(x2), int(y2)))),
+                ]
 
-                cropped_imgs.extend([top_crop, bot_crop])
+                for category, crop_img in crops:
+                    buf = io.BytesIO()
+                    crop_img.save(buf, format='PNG')
+                    buf.seek(0)
+                    b64 = base64.b64encode(buf.getvalue()).decode()
+
+                    cropped_imgs.append(crop_img)
+                    crop_items.append({
+                        "category": category,
+                        "imageBase64": f"data:image/png;base64,{b64}",
+                    })
+
                 detections.append({
                     "person": {
                         "x1": float(x1), "y1": float(y1),
                         "x2": float(x2), "y2": float(y2),
                         "confidence": conf
-                    },
-                    "crops": ["상의", "하의"]
+                    }
                 })
                 break  # 첫 번째 사람만
 
         if not cropped_imgs:
-            cropped_imgs = [image]
-            detections   = [{"person": None, "crops": ["전체"]}]
-
-        result = analyze_outfit(cropped_imgs)
-
-        item_attrs = []
-        for img in cropped_imgs:
-            attrs = classify_attributes(img)
-            item_attrs.append(attrs)
-
-        # 크롭 이미지 base64
-        crop_b64_list = []
-        for img in cropped_imgs:
             buf = io.BytesIO()
-            img.save(buf, format='PNG')
+            image.save(buf, format='PNG')
             buf.seek(0)
-            crop_b64_list.append(
-                f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-            )
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            cropped_imgs = [image]
+            crop_items   = [{
+                "category": "전체",
+                "imageBase64": f"data:image/png;base64,{b64}",
+            }]
+            detections = [{"person": None}]
+
+        main_imgs = [
+            img for img, item in zip(cropped_imgs, crop_items)
+            if item["category"] in ["상의", "하의"]
+        ]
+        accessory_imgs = [
+            img for img, item in zip(cropped_imgs, crop_items)
+            if item["category"] in ["신발"]
+        ]
+        if not main_imgs and crop_items[0]["category"] == "전체":
+            main_imgs = [cropped_imgs[0]]
+
+        result = analyze_outfit(
+            images=main_imgs,
+            accessory_images=accessory_imgs,
+            category_list=[item["category"] for item in crop_items],
+        )
 
         return {
-            "success": True,
-            "harmony_score": result["harmony_score"],
+            "success":             True,
+            "harmony_score":       result["harmony_score"],
             "harmony_sigmoid_raw": result.get("harmony_sigmoid_raw"),
-            "items": item_attrs,
-            "reasons": result["reasons"],
-            "detections": detections,
-            "crop_images": crop_b64_list,
+            "color_score":         result.get("color_score"),
+            "reasons":             result["reasons"],
+            "detections":          detections,
+            "crop_items":          crop_items,
         }
 
     except Exception as e:

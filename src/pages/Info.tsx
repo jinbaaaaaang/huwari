@@ -51,8 +51,8 @@ const FEATURES = [
     ),
   },
   {
-    title: '웹캠 캡처',
-    desc: '카메라로 찍은 프레임을 바로 코디 캔버스에 추가할 수 있습니다. 업로드와 동일한 분석·조화 파이프라인이 적용됩니다.',
+    title: '웹캠 실시간·캡처',
+    desc: '카메라를 켜면 5초마다 조화 점수와 XAI 피드백이 갱신됩니다. 「캡처」하면 상·하의·신발이 크롭되어 배경 제거 후 캔버스에 추가됩니다.',
     icon: (
       <path
         strokeLinecap="round"
@@ -80,7 +80,7 @@ const STEPS = [
   {
     n: '1',
     title: '아이템 추가',
-    desc: '「코디 업로드」에서 이미지를 고르거나 「웹캠」으로 촬영하세요. 배경이 제거되고 가이드 위치에 자동 배치됩니다.',
+    desc: '「코디 업로드」에서 이미지를 고르거나 「웹캠」을 켜세요. 웹캠은 실시간 조화·피드백이 5초마다 갱신되고, 「캡처」 시 배경 제거 후 가이드에 배치됩니다.',
   },
   {
     n: '2',
@@ -254,6 +254,39 @@ const Info = () => {
         </div>
 
         <div className="col-span-12 border-b border-secondary">
+          <SectionTitle>웹캠</SectionTitle>
+          <div className="p-8 pt-5 space-y-4">
+            <p className="text-xs text-secondary leading-relaxed">
+              홈 화면 상단에서 <span className="font-medium text-secondary">「웹캠」</span> 탭을 선택하면 카메라 프리뷰가
+              표시됩니다. 선택한 입력 방식은 브라우저에 저장되어 다음 방문 시에도 유지됩니다.
+            </p>
+            <div className="grid grid-cols-2 border border-secondary rounded-xl overflow-hidden">
+              <div className="border-r border-secondary p-6">
+                <h4 className="text-sm font-regular text-secondary mb-3 uppercase tracking-wider">실시간 분석</h4>
+                <ul className="text-xs text-secondary space-y-2 leading-relaxed list-disc list-inside">
+                  <li>카메라 ON 후 즉시 1회, 이후 <span className="font-medium text-secondary">5초마다</span> 프레임을 분석합니다.</li>
+                  <li>YOLOv8로 사람을 찾아 상·하의·신발 영역을 크롭한 뒤 조화 점수·피드백을 계산합니다.</li>
+                  <li>오른쪽 「코디 평가」에 점수·기니 표정·말풍선 피드백이 표시됩니다. 캔버스에는 아이템을 넣지 않습니다.</li>
+                  <li>이전 분석이 끝나지 않았으면 그번 주기는 건너뜁니다.</li>
+                </ul>
+              </div>
+              <div className="p-6">
+                <h4 className="text-sm font-regular text-secondary mb-3 uppercase tracking-wider">캡처</h4>
+                <ul className="text-xs text-secondary space-y-2 leading-relaxed list-disc list-inside">
+                  <li>「캡처」를 누르면 같은 API로 크롭된 상·하의·신발을 받아 캔버스에 추가합니다.</li>
+                  <li>배경 제거·색·재질·패턴·스타일 분석은 업로드와 동일하게 이어집니다.</li>
+                  <li>캔버스 구성이 바뀌면 predict-harmony로 조화를 다시 계산합니다.</li>
+                </ul>
+              </div>
+            </div>
+            <p className="text-xs text-secondary leading-relaxed">
+              실시간 총점은 FashionHarmony 세트 모델(상·하의)과 FashionCLIP 색 점수를{' '}
+              <span className="font-medium text-secondary">75% / 25%</span>로 합친 0~100점입니다. 피드백 문장은 attention·속성·색·총점 구간 등 XAI 규칙으로 생성됩니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="col-span-12 border-b border-secondary">
           <SectionTitle>코디 캔버스</SectionTitle>
           <div className="p-8 pt-5">
             <p className="text-xs text-secondary leading-relaxed mb-6">
@@ -366,9 +399,10 @@ const Info = () => {
           <div className="p-8 pt-5 space-y-4">
             <p className="text-xs text-secondary leading-relaxed">
               <span className="font-medium text-secondary">총점(score_total)</span>은 FashionHarmony 세트 raw(75%)와
-              FashionCLIP 색 점수(25%)를 합친 뒤, 룰북 규칙과 50:50 병합할 수 있는 0~100 점수입니다. 아이템
-              추가·삭제·속성·색 변경 시 약 0.4초 후 점수와 말풍선 피드백이 다시 생성됩니다. 위치만 드래그한 경우에는
-              재계산하지 않습니다.
+              FashionCLIP 색 점수(25%)를 합친 뒤, 룰북 규칙과 50:50 병합할 수 있는 0~100 점수입니다. 코디 업로드·캔버스
+              기준은 아이템 추가·삭제·속성·색 변경 시 약 0.4초 후 점수와 말풍선 피드백이 다시 생성됩니다. 위치만
+              드래그한 경우에는 재계산하지 않습니다. 웹캠 실시간은 캔버스 없이{' '}
+              <span className="font-medium text-secondary">5초마다 webcam-harmony</span> 결과로 점수·피드백이 갱신됩니다.
             </p>
             <div className="border border-secondary rounded-xl p-5">
               <h4 className="text-xs font-medium text-secondary uppercase tracking-wider mb-2">피드백 톤</h4>
@@ -410,6 +444,7 @@ const Info = () => {
                 { name: 'OpenAI CLIP', sub: '의류 종류 분류' },
                 { name: '룰북', sub: '조합 규칙·설명' },
                 { name: 'PyTorch', sub: '딥러닝 추론' },
+                { name: 'YOLOv8', sub: '웹캠 사람·크롭' },
                 { name: 'Tailwind CSS', sub: '스타일링' },
               ].map((t, i) => (
                 <div
