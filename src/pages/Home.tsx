@@ -56,10 +56,22 @@ function itemSignature(items: PlacedItem[]) {
       const tex = i.texture ?? ''
       const pat = i.pattern ?? ''
       const sty = i.style ?? ''
-      return `${i.id}:${cat}:${tex}:${pat}:${sty}:${fp}`
+      const colorKey = (i.colors ?? [])
+        .slice(0, 3)
+        .map((c) => c.hex)
+        .join(',')
+      return `${i.id}:${cat}:${tex}:${pat}:${sty}:${colorKey}:${fp}`
     })
     .sort()
     .join('\0')
+}
+
+/** 추가·삭제 감지 — id 집합만 비교 */
+function itemCompositionSignature(items: PlacedItem[]) {
+  return [...items]
+    .map((i) => i.id)
+    .sort()
+    .join('|')
 }
 
 function readHarmonyCacheForItems(items: PlacedItem[]): HarmonyScore | null {
@@ -172,7 +184,17 @@ function Home() {
   // beforeItems 변경 시 localStorage에 저장 (초기화 버튼을 누르지 않는 한 유지)
   useEffect(() => {
     if (beforeItems.length > 0) {
-      localStorage.setItem(LS_ITEMS, JSON.stringify(beforeItems))
+      try {
+        localStorage.setItem(LS_ITEMS, JSON.stringify(beforeItems))
+      } catch {
+        // 배경 제거 PNG(base64) 3장 이상이면 5MB 한도 초과 가능 — 메타만 저장해 앱이 깨지지 않게 함
+        try {
+          const metaOnly = beforeItems.map(({ imageUrl: _img, ...rest }) => rest)
+          localStorage.setItem(LS_ITEMS, JSON.stringify(metaOnly))
+        } catch {
+          /* ignore */
+        }
+      }
     } else {
       try {
         if (localStorage.getItem(LS_LOAD_HISTORY)) return
@@ -299,6 +321,15 @@ function Home() {
       .slice(0, 5)
   }, [beforeItems])
 
+  /** 조화 재계산 — 구성(추가·삭제) + 속성·색·이미지 변경. 위치·크기만 바뀌면 생략 */
+  const harmonyInputSig = useMemo(() => itemSignature(beforeItems), [beforeItems])
+  const itemCompositionSig = useMemo(
+    () => itemCompositionSignature(beforeItems),
+    [beforeItems],
+  )
+  const prevHarmonyInputSigRef = useRef<string | null>(null)
+  const prevCompositionSigRef = useRef<string | null>(null)
+
   const feedbackRows = useMemo(() => {
     if (isLoadingHarmony) {
       return Array.from({ length: FEEDBACK_MIN_ROWS }, (_, i) => ({
@@ -318,38 +349,61 @@ function Home() {
     }
     const n = Math.max(FEEDBACK_MIN_ROWS, reasons.length)
     return Array.from({ length: n }, (_, i) => ({
-      id: `reason-${i}`,
+      id: `reason-${i}-${reasons[i] ?? 'empty'}`,
       text: reasons[i] ?? null,
     }))
   }, [isLoadingHarmony, harmonyScore?.reasons])
 
-  // 조화 점수 계산 API 호출 (debounce)
+  // 조화 점수·피드백 API (debounce) — 아이템 추가·삭제·속성 변경 시 재생성
   useEffect(() => {
-    // 이전 타이머 취소
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current)
     }
 
-    // Before 아이템이 없으면 점수 표시 안 함
     if (beforeItems.length === 0) {
+      prevHarmonyInputSigRef.current = null
+      prevCompositionSigRef.current = null
       setHarmonyScore(null)
       setIsLoadingHarmony(false)
       return
     }
 
-    // 400ms debounce (복원 직후에는 로딩 표시를 지연해 캐시 점수가 보이게 함)
-    debounceTimerRef.current = setTimeout(async () => {
+    const compositionChanged =
+      prevCompositionSigRef.current !== itemCompositionSig
+    const attrsChanged = prevHarmonyInputSigRef.current !== harmonyInputSig
+
+    // 드래그·리사이즈만 바뀐 경우
+    if (!compositionChanged && !attrsChanged) {
+      return
+    }
+
+    if (compositionChanged) {
       setIsLoadingHarmony(true)
       try {
-        const response = await fetch('http://localhost:8000/api/predict-harmony', {
+        localStorage.removeItem(LS_HARMONY_CACHE)
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const sigAtRequest = harmonyInputSig
+    const compositionAtRequest = itemCompositionSig
+
+    debounceTimerRef.current = setTimeout(async () => {
+      const itemsSnapshot = beforeItemsRef.current
+      if (itemsSnapshot.length === 0) return
+
+      setIsLoadingHarmony(true)
+      try {
+        const response = await fetch('/api/predict-harmony', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            beforeItems,
-            afterItems
-          })
+            beforeItems: itemsSnapshot,
+            afterItems,
+          }),
         })
 
         if (!response.ok) {
@@ -358,21 +412,21 @@ function Home() {
 
         const data: HarmonyScore = await response.json()
         setHarmonyScore(data)
+        prevHarmonyInputSigRef.current = sigAtRequest
+        prevCompositionSigRef.current = compositionAtRequest
       } catch (error) {
         console.error('조화 점수 계산 오류:', error)
-        // 에러 발생 시 기존 점수 유지
       } finally {
         setIsLoadingHarmony(false)
       }
-    }, 400)
+    }, compositionChanged ? 200 : 400)
 
-    // cleanup
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current)
       }
     }
-  }, [beforeItems, afterItems])
+  }, [beforeItems.length, itemCompositionSig, harmonyInputSig, afterItems])
 
   // 조화 상태 영역 전용: 점수 구간별 표정 (0~39 화남, 40~69 보통, 70~100 행복). 피드백 줄 기니는 항상 normal.
   const harmonyGiniMood = useMemo((): 'neutral' | 'angry' | 'normal' | 'happy' => {

@@ -16,6 +16,7 @@ from sklearn.cluster import KMeans
 from pathlib import Path
 import re
 import time
+import torch.nn.functional as F
 
 from harmony import calculate_harmony_score
 from harmony_label_bridge import placed_item_to_rulebook_dict
@@ -29,18 +30,23 @@ from models.fashion_harmony import (
     STYLE_CLASSES,
 )
 
-# ===== transformers (FashionCLIP + 카테고리용 OpenAI CLIP) =====
+# ===== open_clip (FashionCLIP) + transformers (카테고리용 OpenAI CLIP) =====
 try:
-    from transformers import AutoModel, AutoProcessor, CLIPModel, CLIPProcessor
+    import open_clip
+    HAS_OPEN_CLIP = True
+except ImportError:
+    HAS_OPEN_CLIP = False
+    open_clip = None
+
+try:
+    from transformers import CLIPModel, CLIPProcessor
     HAS_TRANSFORMERS = True
 except ImportError:
     HAS_TRANSFORMERS = False
-    AutoModel = None
-    AutoProcessor = None
     CLIPModel = None
     CLIPProcessor = None
 
-FASHION_CLIP_MODEL_ID = "Marqo/marqo-fashionCLIP"
+FASHION_CLIP_MODEL_ID = "hf-hub:Marqo/marqo-fashionCLIP"
 CATEGORY_CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
 
 app = FastAPI(title="HUWARI API")
@@ -51,9 +57,11 @@ HARMONY_CKPT = Path(__file__).resolve().parent / "models" / "fashion_harmony_ret
 # ===== 전역 변수 =====
 _harmony_model  = None
 _yolo_model     = None
-_clip_model     = None
-_clip_processor = None
-_use_clip       = False
+_clip_model       = None
+_clip_preprocess  = None
+_clip_tokenizer   = None
+_use_clip         = False
+_clip_load_failed = False
 _category_clip_model     = None
 _category_clip_processor = None
 _use_category_clip       = False
@@ -97,25 +105,25 @@ def get_yolo_model():
 
 
 def get_clip_model():
-    """FashionCLIP(Marqo) 지연 로딩 — 색상 점수·피드백 문구에 사용"""
-    global _clip_model, _clip_processor, _use_clip
-    if _clip_model is None and HAS_TRANSFORMERS:
-        try:
-            _clip_processor = AutoProcessor.from_pretrained(
-                FASHION_CLIP_MODEL_ID, trust_remote_code=True
-            )
-            _clip_model = AutoModel.from_pretrained(
-                FASHION_CLIP_MODEL_ID,
-                trust_remote_code=True,
-                low_cpu_mem_usage=False,
-            )
-            _clip_model.eval()
-            _use_clip = True
-            print("FashionCLIP 로드 완료")
-        except Exception as e:
-            print(f"FashionCLIP 로드 실패: {e}")
-            _use_clip = False
-    return _clip_model, _clip_processor
+    """FashionCLIP(Marqo) — open_clip hf-hub 로딩 (색상 점수·피드백 문구)"""
+    global _clip_model, _clip_preprocess, _clip_tokenizer, _use_clip, _clip_load_failed
+    if _clip_model is not None:
+        return _clip_model, _clip_preprocess, _clip_tokenizer
+    if _clip_load_failed or not HAS_OPEN_CLIP:
+        return None, None, None
+    try:
+        _clip_model, _, _clip_preprocess = open_clip.create_model_and_transforms(
+            FASHION_CLIP_MODEL_ID
+        )
+        _clip_tokenizer = open_clip.get_tokenizer(FASHION_CLIP_MODEL_ID)
+        _clip_model.eval()
+        _use_clip = True
+        print("FashionCLIP 로드 완료")
+    except Exception as e:
+        _clip_load_failed = True
+        _use_clip = False
+        print(f"FashionCLIP 로드 실패: {e}")
+    return _clip_model, _clip_preprocess, _clip_tokenizer
 
 
 def get_category_clip_model():
@@ -134,10 +142,31 @@ def get_category_clip_model():
     return _category_clip_model, _category_clip_processor
 
 
-def _clip_forward(model, inputs: Dict):
-    """MarqoFashionCLIP.forward 는 input_ids·pixel_values 만 받음( attention_mask 등 제외 )."""
-    kwargs = {k: inputs[k] for k in ("input_ids", "pixel_values") if k in inputs}
-    return model(**kwargs, return_dict=True)
+def _fashion_clip_text_probs(
+    model,
+    preprocess,
+    tokenizer,
+    outfit_img: Image.Image,
+    texts: List[str],
+    device: torch.device,
+) -> torch.Tensor:
+    """코디 이미지 1장과 텍스트 목록의 유사도(softmax). shape: (len(texts),)"""
+    image_tensor = preprocess(outfit_img.convert("RGB")).unsqueeze(0).to(device)
+    text_tokens = tokenizer(texts).to(device)
+    with torch.no_grad():
+        image_features = model.encode_image(image_tensor)
+        text_features = model.encode_text(text_tokens)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        logits = (100.0 * image_features @ text_features.T)[0]
+    return torch.softmax(logits, dim=0)
+
+
+def _build_outfit_collage(images: List[Image.Image], tile: int = 224) -> Image.Image:
+    collage = Image.new("RGB", (tile * len(images), tile), (255, 255, 255))
+    for i, img in enumerate(images):
+        collage.paste(img.convert("RGB").resize((tile, tile)), (i * tile, 0))
+    return collage
 
 
 def pil_to_tensor(image: Image.Image) -> torch.Tensor:
@@ -146,34 +175,22 @@ def pil_to_tensor(image: Image.Image) -> torch.Tensor:
 
 def get_clip_color_score(images: List[Image.Image]) -> float:
     """FashionCLIP으로 색상 조화도 점수 계산 (0~1)"""
-    clip_m, clip_p = get_clip_model()
-    if not _use_clip or clip_m is None:
+    clip_m, preprocess, tokenizer = get_clip_model()
+    if not _use_clip or clip_m is None or preprocess is None or tokenizer is None:
         return 0.5
 
     device = get_device()
 
     try:
-        size = 224
-        outfit_img = Image.new("RGB", (size * len(images), size), (255, 255, 255))
-        for i, img in enumerate(images):
-            outfit_img.paste(img.resize((size, size)), (i * size, 0))
-
+        outfit_img = _build_outfit_collage(images)
         prompts = [
             "outfit with harmonious matching color tones",
             "outfit with clashing mismatched colors",
         ]
-
         clip_m = clip_m.to(device)
-        inputs = clip_p(
-            text=prompts, images=outfit_img,
-            return_tensors="pt", padding=True
+        probs = _fashion_clip_text_probs(
+            clip_m, preprocess, tokenizer, outfit_img, prompts, device
         )
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            outputs = _clip_forward(clip_m, inputs)
-            probs   = torch.softmax(outputs.logits_per_image[0], dim=0)
-
         return float(probs[0])
 
     except Exception as e:
@@ -181,9 +198,422 @@ def get_clip_color_score(images: List[Image.Image]) -> float:
         return 0.5
 
 
+def _dominant_color_from_placed_item(item: "PlacedItemRequest") -> Optional[Dict]:
+    if not item.colors:
+        return None
+    top = max(item.colors, key=lambda c: c.percentage)
+    return {"rgb": top.rgb, "hex": top.hex, "percentage": float(top.percentage)}
+
+
+def _build_set_transformer_sequence(model, imgs_tensor: torch.Tensor, mask: torch.Tensor):
+    """FashionHarmonyModel과 동일 경로로 Set Transformer 입력 시퀀스 구성 (CLS 포함)."""
+    B, N, C, H, W = imgs_tensor.shape
+    flat = imgs_tensor.view(B * N, C, H, W)
+    emb = model.backbone(flat)
+    preds = model.attr_heads(emb)
+    attr_vec = torch.cat(
+        [
+            F.softmax(preds["category"], dim=1),
+            F.softmax(preds["material"], dim=1),
+            F.softmax(preds["pattern"], dim=1),
+            F.softmax(preds["style"], dim=1),
+        ],
+        dim=1,
+    )
+    attr_emb = model.attr_proj(attr_vec)
+    combined = torch.cat([emb, attr_emb], dim=1).view(B, N, -1)
+
+    st = model.set_transformer
+    cls = st.cls_token.expand(B, -1, -1)
+    x = torch.cat([cls, combined], dim=1)
+
+    key_padding_mask = None
+    if mask is not None:
+        cls_mask = torch.ones(B, 1, device=mask.device)
+        full_mask = torch.cat([cls_mask, mask], dim=1)
+        key_padding_mask = full_mask == 0
+
+    return x, key_padding_mask, st
+
+
+def get_attention_weights(model, imgs_tensor: torch.Tensor, mask: torch.Tensor, device) -> Optional[torch.Tensor]:
+    """Set Transformer 1레이어 self-attention (아이템 간 관계)."""
+    try:
+        model.eval()
+        with torch.no_grad():
+            x, key_padding_mask, st = _build_set_transformer_sequence(model, imgs_tensor, mask)
+            layer0 = st.transformer.layers[0]
+            _, attn_weights = layer0.self_attn(
+                x,
+                x,
+                x,
+                key_padding_mask=key_padding_mask,
+                need_weights=True,
+                average_attn_weights=True,
+            )
+            attn = attn_weights[0].detach().cpu()
+            attn = attn[1:, 1:]
+            n_valid = int(mask[0].sum().item()) if mask is not None else attn.shape[0]
+            n_valid = max(0, min(n_valid, attn.shape[0]))
+            if n_valid < 2:
+                return None
+            return attn[:n_valid, :n_valid]
+    except Exception as e:
+        print(f"attention weights 추출 실패: {e}")
+        return None
+
+
+_SCORE_SUMMARY_LINES = frozenset({
+    "전체적으로 완성도 높은 코디입니다",
+    "전반적으로 균형잡힌 코디입니다",
+    "일부 아이템 교체로 조화도를 높일 수 있습니다",
+    "색상 또는 스타일 통일감을 높이면 더 좋아집니다",
+})
+
+_LOW_SCORE_THRESHOLD = 60.0
+_VERY_LOW_SCORE_THRESHOLD = 40.0
+_FEEDBACK_MAX_LINES = 6
+
+_NEGATIVE_REASON_HINTS = (
+    "조화롭지 않",
+    "충돌",
+    "어려움",
+    "맞지 않",
+    "어색",
+    "과도한",
+    "산만",
+    "정리가 필요",
+    "일관되지 않",
+    "분산",
+)
+
+
+def _pick_attr_from_request_or_model(
+    request_attr: Optional[Dict],
+    model_attr: Dict,
+    key: str,
+) -> Optional[str]:
+    """UI에서 수정한 재질·패턴·스타일 우선, 없으면 이미지 분류 결과."""
+    if request_attr:
+        v = request_attr.get(key)
+        if v:
+            return str(v)
+    block = model_attr.get(key)
+    if isinstance(block, dict) and block.get("class"):
+        return str(block["class"])
+    return None
+
+
+def _score_summary_line(harmony_score: float) -> str:
+    if harmony_score >= 80:
+        return "전체적으로 완성도 높은 코디입니다"
+    if harmony_score >= 60:
+        return "전반적으로 균형잡힌 코디입니다"
+    if harmony_score >= 40:
+        return "일부 아이템 교체로 조화도를 높일 수 있습니다"
+    return "색상 또는 스타일 통일감을 높이면 더 좋아집니다"
+
+
+def _is_negative_reason(text: str) -> bool:
+    return any(h in text for h in _NEGATIVE_REASON_HINTS)
+
+
+def _replace_score_summary(reasons: List[str], harmony_score: float) -> List[str]:
+    """룰북 병합 후 최종 총점에 맞게 종합 문장만 갱신."""
+    filtered = [r for r in reasons if r not in _SCORE_SUMMARY_LINES]
+    filtered.append(_score_summary_line(harmony_score))
+    return filtered[: _FEEDBACK_MAX_LINES + 1]
+
+
+def _prepend_unique_lines(target: List[str], lines: List[str], max_add: int = 2) -> None:
+    added = 0
+    for line in lines:
+        if not line or line in target or line in _SCORE_SUMMARY_LINES:
+            continue
+        target.insert(min(added, len(target)), line)
+        added += 1
+        if added >= max_add:
+            break
+
+
+_STYLE_OPPOSITE_PAIRS = [
+    frozenset({"로맨틱", "스트리트"}),
+    frozenset({"포멀", "캐주얼"}),
+    frozenset({"미니멀", "Y2K"}),
+]
+
+_TEXTURE_LINES: Dict[str, str] = {
+    "데님": "데님 소재 중심의 캐주얼한 코디입니다",
+    "니트": "니트 소재 중심의 포근하고 따뜻한 분위기입니다",
+    "실크": "실크 소재 중심의 고급스러운 분위기입니다",
+    "가죽": "가죽 소재 중심의 엣지 있는 코디입니다",
+    "울": "울 소재 중심의 클래식한 분위기입니다",
+    "면": "면 소재 중심의 가볍고 편안한 코디입니다",
+    "패딩": "패딩 소재 중심의 실용적인 아우터 코디입니다",
+    "기타": "다양한 소재가 조합된 코디입니다",
+}
+
+_PATTERN_CONFLICT_PAIRS = [
+    frozenset({"스트라이프", "체크"}),
+    frozenset({"스트라이프", "호피·뱀피"}),
+    frozenset({"체크", "호피·뱀피"}),
+    frozenset({"스트라이프", "플로럴"}),
+    frozenset({"체크", "그래픽"}),
+]
+
+_ATTENTION_PAIR_LINES: Dict[frozenset, str] = {
+    frozenset({"상의", "하의"}): "상의와 하의의 조화가 코디의 핵심 요소입니다",
+    frozenset({"상의", "아우터"}): "아우터와 상의의 레이어링이 포인트입니다",
+}
+
+
+def _attention_weights_from_list(raw) -> Optional[torch.Tensor]:
+    if raw is None:
+        return None
+    try:
+        t = torch.tensor(raw, dtype=torch.float32)
+        if t.dim() == 2 and t.shape[0] >= 2:
+            return t
+    except Exception:
+        pass
+    return None
+
+
+def _collect_item_attributes(
+    item_attrs: List[Dict],
+    request_attrs_main: List[Dict],
+) -> tuple[List[str], List[str], List[str]]:
+    styles: List[str] = []
+    textures: List[str] = []
+    patterns: List[str] = []
+    for i, attr in enumerate(item_attrs):
+        req = request_attrs_main[i] if i < len(request_attrs_main) else None
+        style = _pick_attr_from_request_or_model(req, attr, "style")
+        texture = _pick_attr_from_request_or_model(req, attr, "texture")
+        pattern = _pick_attr_from_request_or_model(req, attr, "pattern")
+        if style:
+            styles.append(style)
+        if texture:
+            textures.append(texture)
+        if pattern:
+            patterns.append(pattern)
+    return styles, textures, patterns
+
+
+def _explain_attention(
+    attention_weights: Optional[torch.Tensor],
+    category_list: List[str],
+    item_attrs: List[Dict],
+) -> Optional[str]:
+    if attention_weights is None or len(item_attrs) < 2:
+        return None
+
+    n = min(len(item_attrs), attention_weights.shape[0], len(category_list))
+    if n < 2:
+        return None
+
+    attn = attention_weights[:n, :n]
+    max_val = 0.0
+    max_pair = (0, 1)
+    for i in range(n):
+        for j in range(n):
+            if i != j and float(attn[i][j]) > max_val:
+                max_val = float(attn[i][j])
+                max_pair = (i, j)
+
+    i, j = max_pair
+    cat_i = category_list[i] if i < len(category_list) else f"아이템{i + 1}"
+    cat_j = category_list[j] if j < len(category_list) else f"아이템{j + 1}"
+    pair_key = frozenset({cat_i, cat_j})
+
+    if pair_key in _ATTENTION_PAIR_LINES:
+        return _ATTENTION_PAIR_LINES[pair_key]
+
+    layer_categories = {"상의", "아우터", "모자"}
+    if pair_key <= layer_categories and len(pair_key) == 2:
+        return f"{cat_i}와 {cat_j}의 레이어링이 포인트입니다"
+
+    return f"{cat_i}와 {cat_j}의 조화가 코디의 핵심 요소입니다"
+
+
+def _explain_colors(colors: List[Dict], harmony_score: float) -> List[str]:
+    if not colors:
+        return []
+
+    lines: List[str] = []
+    avg_brightness = sum(
+        (c["rgb"][0] * 0.299 + c["rgb"][1] * 0.587 + c["rgb"][2] * 0.114) for c in colors
+    ) / len(colors)
+    dominant_colors = [c for c in colors if c.get("percentage", 0) > 15]
+
+    if harmony_score < _LOW_SCORE_THRESHOLD:
+        if len(dominant_colors) >= 4:
+            lines.append("색이 많아 전체 톤이 산만해 보일 수 있습니다")
+        elif len(dominant_colors) >= 3:
+            lines.append("색상 수가 많아 통일감을 줄일 여지가 있습니다")
+        else:
+            brightnesses = [
+                c["rgb"][0] * 0.299 + c["rgb"][1] * 0.587 + c["rgb"][2] * 0.114
+                for c in colors
+            ]
+            if len(brightnesses) >= 2 and max(brightnesses) - min(brightnesses) > 80:
+                lines.append("아이템마다 밝기 차이가 커 색 조화가 어렵게 느껴질 수 있습니다")
+            else:
+                lines.append("상·하의 색감을 한 톤으로 맞추면 더 안정적으로 보입니다")
+        if harmony_score < _VERY_LOW_SCORE_THRESHOLD and len(lines) < 2:
+            lines.append("포인트 색을 하나로 줄이면 조화도가 올라갑니다")
+        return lines[:2]
+
+    if avg_brightness < 100:
+        lines.append("저채도 다크 톤으로 차분한 분위기입니다")
+    elif avg_brightness > 180:
+        lines.append("밝은 톤으로 경쾌한 분위기입니다")
+    else:
+        lines.append("중간 밝기로 균형 잡힌 색감입니다")
+
+    if len(dominant_colors) <= 2:
+        lines.append("색 수가 적어 통일감 있는 코디입니다")
+    elif len(dominant_colors) >= 4:
+        lines.append("다양한 색으로 포인트가 풍부합니다")
+
+    return lines[:2]
+
+
+def _explain_texture(textures: List[str], harmony_score: float) -> Optional[str]:
+    uniq = list(dict.fromkeys(textures))
+    if not uniq:
+        return None
+    if len(uniq) >= 2 and harmony_score < _LOW_SCORE_THRESHOLD:
+        return "서로 다른 재질이 많아 질감 대비를 줄이면 더 자연스럽습니다"
+    if len(uniq) == 1:
+        return _TEXTURE_LINES.get(uniq[0], _TEXTURE_LINES["기타"])
+    return _TEXTURE_LINES["기타"]
+
+
+def _explain_pattern(patterns: List[str], harmony_score: float) -> Optional[str]:
+    uniq = list(dict.fromkeys(patterns))
+    if not uniq:
+        return None
+
+    pat_set = set(uniq)
+    critical = harmony_score < _LOW_SCORE_THRESHOLD
+
+    for pair in _PATTERN_CONFLICT_PAIRS:
+        if pair.issubset(pat_set):
+            if critical:
+                items = [p for p in uniq if p in pair]
+                a, b = items[0], items[1] if len(items) > 1 else sorted(pair)[1]
+                return f"{a}과 {b} 패턴이 겹쳐 시선이 분산됩니다"
+            return "다양한 패턴이 혼재하여 과감한 스타일링입니다"
+
+    non_solid = [p for p in uniq if p != "무지"]
+
+    if len(uniq) == 1:
+        if uniq[0] == "무지":
+            return "무지 패턴으로 깔끔하게 통일된 코디입니다"
+        return f"{uniq[0]} 패턴이 돋보이는 코디입니다"
+
+    if len(non_solid) == 0:
+        return "무지 패턴으로 깔끔하게 통일된 코디입니다"
+
+    if "무지" in pat_set and len(non_solid) == 1:
+        return f"무지에 {non_solid[0]} 포인트가 더해진 코디입니다"
+
+    if len(uniq) >= 2:
+        if critical:
+            return f"{uniq[0]}과 {uniq[1]} 패턴 조합이 어수선해 보일 수 있습니다"
+        return f"{uniq[0]}과 {uniq[1]} 패턴이 조합되어 풍성한 코디입니다"
+
+    return None
+
+
+def _explain_style(styles: List[str], harmony_score: float) -> Optional[str]:
+    if not styles:
+        return None
+
+    critical = harmony_score < _LOW_SCORE_THRESHOLD
+    style_set = set(styles)
+    for pair in _STYLE_OPPOSITE_PAIRS:
+        if pair.issubset(style_set):
+            ordered = [s for s in styles if s in pair]
+            if len(ordered) >= 2:
+                a, b = ordered[0], ordered[1]
+            else:
+                a, b = sorted(pair)
+            if critical:
+                return f"{a}와 {b} 스타일이 부딪혀 전체 톤이 일관되지 않습니다"
+            return f"{a}와 {b}가 혼재하여 개성 있는 코디입니다"
+
+    uniq = list(dict.fromkeys(styles))
+    if len(uniq) == 1:
+        return f"{uniq[0]} 스타일이 통일된 깔끔한 코디입니다"
+
+    counts: Dict[str, int] = {}
+    for s in styles:
+        counts[s] = counts.get(s, 0) + 1
+    top_style = max(counts, key=counts.get)
+    if counts[top_style] >= len(styles) - 1:
+        return f"{top_style} 스타일이 통일된 깔끔한 코디입니다"
+
+    if critical:
+        return "스타일 방향이 여러 갈래로 나뉘어 정리가 필요해 보입니다"
+
+    return f"{uniq[0]} 스타일이 통일된 깔끔한 코디입니다"
+
+
+def generate_explanation(
+    attention_weights: Optional[torch.Tensor],
+    item_attrs: List[Dict],
+    colors: List[Dict],
+    category_list: List[str],
+    harmony_score: float,
+    request_attrs_main: Optional[List[Dict]] = None,
+) -> List[str]:
+    """Attention → 색상 → 재질 → 패턴 → 스타일 순 규칙 기반 피드백 (저점수 시 개선·부정 톤)."""
+    request_attrs_main = request_attrs_main or []
+    explanations: List[str] = []
+    critical = harmony_score < _LOW_SCORE_THRESHOLD
+
+    styles: List[str] = []
+    textures: List[str] = []
+    patterns: List[str] = []
+    if item_attrs:
+        styles, textures, patterns = _collect_item_attributes(item_attrs, request_attrs_main)
+
+    if harmony_score < _VERY_LOW_SCORE_THRESHOLD:
+        explanations.append("전체적으로 코디 밸런스를 다시 맞춰 볼 필요가 있습니다")
+
+    if not critical:
+        attn_line = _explain_attention(attention_weights, category_list, item_attrs)
+        if attn_line:
+            explanations.append(attn_line)
+
+    explanations.extend(_explain_colors(colors, harmony_score))
+
+    texture_line = _explain_texture(textures, harmony_score)
+    if texture_line:
+        explanations.append(texture_line)
+
+    pattern_line = _explain_pattern(patterns, harmony_score)
+    if pattern_line:
+        explanations.append(pattern_line)
+
+    style_line = _explain_style(styles, harmony_score)
+    if style_line:
+        explanations.append(style_line)
+
+    explanations = [e for e in explanations if e not in _SCORE_SUMMARY_LINES]
+    explanations.append(_score_summary_line(harmony_score))
+
+    return explanations[: _FEEDBACK_MAX_LINES + 1]
+
+
 def analyze_outfit(
     images: List[Image.Image],
     accessory_images: Optional[List[Image.Image]] = None,
+    category_list: Optional[List[str]] = None,
+    colors: Optional[List[Dict]] = None,
+    request_attrs_main: Optional[List[Dict]] = None,
 ) -> Dict:
     """
     이미지 리스트 → 조화 점수 계산
@@ -192,8 +622,14 @@ def analyze_outfit(
     """
     if accessory_images is None:
         accessory_images = []
+    if category_list is None:
+        category_list = []
+    if colors is None:
+        colors = []
+    if request_attrs_main is None:
+        request_attrs_main = []
 
-    model  = get_harmony_model()
+    model = get_harmony_model()
     device = get_device()
 
     main_images = images[:4]
@@ -203,13 +639,15 @@ def analyze_outfit(
         tensors.append(torch.zeros(3, 224, 224))
 
     imgs_tensor = torch.stack(tensors).unsqueeze(0).to(device)
-    mask        = torch.zeros(1, 4).to(device)
-    mask[0, :len(main_images)] = 1.0
+    mask = torch.zeros(1, 4).to(device)
+    mask[0, : len(main_images)] = 1.0
 
     with torch.no_grad():
         harmony_raw = model(imgs_tensor, mask).item()
 
-    all_images  = main_images + list(accessory_images)
+    attention_weights = get_attention_weights(model, imgs_tensor, mask, device)
+
+    all_images = main_images + list(accessory_images)
     color_score = get_clip_color_score(all_images) if all_images else 0.5
 
     # FashionCLIP 미로드·실패 시 color_score 는 0.5(중립)인데, 그대로 25% 섞으면 총점이 항상 눌림(예: 87대)
@@ -223,25 +661,30 @@ def analyze_outfit(
     if len(main_images) == 1 and len(accessory_images) == 0:
         score_0to100 = 100.0
 
-    clip_feedback = generate_clip_feedback(all_images)
+    item_attrs = []
+    for img in main_images:
+        item_attrs.append(classify_attributes(img))
 
-    reasons = []
-    if score_0to100 >= 80:
-        reasons.append("전반적으로 조화로운 코디입니다")
-    elif score_0to100 >= 60:
-        reasons.append("적절한 조화를 이루고 있습니다")
-    elif score_0to100 >= 40:
-        reasons.append("일부 조화가 부족합니다")
-    else:
-        reasons.append("조화가 부족한 조합입니다")
+    reasons = generate_explanation(
+        attention_weights=attention_weights,
+        item_attrs=item_attrs,
+        colors=colors,
+        category_list=category_list,
+        harmony_score=score_0to100,
+        request_attrs_main=request_attrs_main,
+    )
 
-    reasons.extend(clip_feedback)
+    attn_list = None
+    if attention_weights is not None:
+        attn_list = attention_weights.tolist()
 
     return {
-        "harmony_score":       score_0to100,
+        "harmony_score": score_0to100,
         "harmony_sigmoid_raw": harmony_raw,
-        "color_score":         round(color_score * 100, 1) if _use_clip else round(harmony_raw * 100, 1),
-        "reasons":             reasons,
+        "color_score": round(color_score * 100, 1) if _use_clip else round(harmony_raw * 100, 1),
+        "reasons": reasons,
+        "item_attrs": item_attrs,
+        "attention_weights": attn_list,
     }
 
 
@@ -303,20 +746,14 @@ def generate_clip_feedback(images: List[Image.Image]) -> List[str]:
     여러 아이템 이미지를 나란히 붙여서 하나의 코디 이미지로 만든 후
     피드백 텍스트와 유사도 계산
     """
-    clip_m, clip_p = get_clip_model()
-    if not _use_clip or clip_m is None:
+    clip_m, preprocess, tokenizer = get_clip_model()
+    if not _use_clip or clip_m is None or preprocess is None or tokenizer is None:
         return []
 
     device = get_device()
 
     try:
-        # 아이템 이미지들을 나란히 붙여서 하나의 코디 이미지로 만들기
-        size    = 224
-        w_total = size * len(images)
-        outfit_img = Image.new("RGB", (w_total, size), (255, 255, 255))
-        for i, img in enumerate(images):
-            resized = img.resize((size, size))
-            outfit_img.paste(resized, (i * size, 0))
+        outfit_img = _build_outfit_collage(images)
 
         # 피드백 프롬프트 (긍정/부정 쌍으로 구성)
         feedback_prompts = [
@@ -333,16 +770,16 @@ def generate_clip_feedback(images: List[Image.Image]) -> List[str]:
         texts   = [p[0] for p in feedback_prompts]
         labels  = [p[1] for p in feedback_prompts]
 
-        clip_m  = clip_m.to(device)
-        inputs  = clip_p(
-            text=texts, images=outfit_img,
-            return_tensors="pt", padding=True
-        )
-        inputs  = {k: v.to(device) for k, v in inputs.items()}
-
+        clip_m = clip_m.to(device)
         with torch.no_grad():
-            outputs = _clip_forward(clip_m, inputs)
-            probs   = torch.sigmoid(outputs.logits_per_image)[0]
+            image_tensor = preprocess(outfit_img.convert("RGB")).unsqueeze(0).to(device)
+            text_tokens = tokenizer(texts).to(device)
+            image_features = clip_m.encode_image(image_tensor)
+            text_features = clip_m.encode_text(text_tokens)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            logits = (100.0 * image_features @ text_features.T)[0]
+            probs = torch.sigmoid(logits)
 
         # 임계값 0.5 이상인 것만 피드백으로 선택
         # 긍정/부정 쌍에서 높은 쪽만 선택
@@ -547,22 +984,60 @@ class HistorySaveResponse(BaseModel):
     error:     Optional[str] = None
 
 
+# harmony.py 폴백·디버그용 — 사용자 피드백 말풍선에는 넣지 않음
+_RULEBOOK_INTERNAL_REASON_PREFIXES = (
+    "Before 아이템이 없어",
+    "아이템이 1개뿐이어서",
+    "색상 정보가 부족해",
+    "재질 정보가 부족해",
+    "패턴 정보가 부족해",
+    "스타일 정보가 부족해",
+)
+
+
+def _is_user_facing_reason(text: str) -> bool:
+    if not text or "중립으로 계산" in text:
+        return False
+    return not any(text.startswith(p) for p in _RULEBOOK_INTERNAL_REASON_PREFIXES)
+
+
 def _merge_model_rule_reasons(
     model_reasons: List[str],
     rule_reasons: List[str],
-    max_n: int = 6,
+    harmony_score: float,
+    max_n: int = _FEEDBACK_MAX_LINES,
 ) -> List[str]:
+    """저점수면 룰북 부정 문장을 앞에, 높은 점수면 모델 설명을 우선."""
+    model_list = [
+        r for r in (model_reasons or [])
+        if r and r not in _SCORE_SUMMARY_LINES
+    ]
+    rule_user = [r for r in (rule_reasons or []) if _is_user_facing_reason(r)]
+    rule_neg = [r for r in rule_user if _is_negative_reason(r)]
+    rule_other = [r for r in rule_user if not _is_negative_reason(r)]
+
     out: List[str] = []
-    for r in model_reasons or []:
-        if r and r not in out:
+
+    if harmony_score < _LOW_SCORE_THRESHOLD:
+        for r in rule_neg:
+            if r not in out:
+                out.append(r)
+            if len(out) >= 2:
+                break
+
+    for r in model_list:
+        if r not in out:
             out.append(r)
         if len(out) >= max_n:
             return out
-    for r in rule_reasons or []:
-        if r and r not in out:
+
+    pool = rule_neg + rule_other if harmony_score < _LOW_SCORE_THRESHOLD else rule_other + rule_neg
+    for r in pool:
+        if r not in out:
             out.append(r)
         if len(out) >= max_n:
             break
+
     return out
 
 
@@ -632,11 +1107,14 @@ async def predict_harmony(request: HarmonyRequest):
                 reasons=["Before 아이템이 없어 중립으로 계산"], debug={}
             )
 
-        main_imgs          = []
-        accessory_imgs     = []
-        before_rule_items  = []
-        after_rule_items   = []
-        request_attrs_main = []  # main 이미지 순서와 동일 — 요청에 담긴 재질·패턴·스타일(수정 반영)
+        main_imgs            = []
+        accessory_imgs       = []
+        before_rule_items    = []
+        after_rule_items     = []
+        main_categories      = []  # 메인 이미지 순서 — attention 설명용
+        outfit_category_list = []  # beforeItems 로드 순서
+        outfit_colors        = []  # 아이템별 대표색
+        request_attrs_main   = []  # main 이미지 순서와 동일 — 요청에 담긴 재질·패턴·스타일(수정 반영)
         ACCESSORY_CATEGORIES = ["신발", "모자", "악세서리"]
 
         def resolve_category(item: PlacedItemRequest, img: Image.Image) -> str:
@@ -653,10 +1131,15 @@ async def predict_harmony(request: HarmonyRequest):
             if img is None:
                 continue
             category = resolve_category(item, img)
+            outfit_category_list.append(category)
+            dominant = _dominant_color_from_placed_item(item)
+            if dominant:
+                outfit_colors.append(dominant)
             if category in ACCESSORY_CATEGORIES:
                 accessory_imgs.append(img)
             else:
                 main_imgs.append(img)
+                main_categories.append(category)
                 before_rule_items.append(placed_item_to_rulebook_dict(item))
                 request_attrs_main.append(
                     {
@@ -701,13 +1184,15 @@ async def predict_harmony(request: HarmonyRequest):
 
         start_time = time.time()
 
-        result       = analyze_outfit(main_imgs, accessory_imgs)
-        model_total  = float(result["harmony_score"])
-
-        item_attrs = []
-        for img in main_imgs:
-            attrs = classify_attributes(img)
-            item_attrs.append(attrs)
+        result = analyze_outfit(
+            main_imgs,
+            accessory_imgs,
+            category_list=main_categories,
+            colors=outfit_colors,
+            request_attrs_main=request_attrs_main,
+        )
+        model_total = float(result["harmony_score"])
+        item_attrs = result.get("item_attrs") or []
 
         rule_result = None
         if before_rule_items:
@@ -719,14 +1204,39 @@ async def predict_harmony(request: HarmonyRequest):
             score_texture = float(rule_result["score_texture"])
             score_pattern = float(rule_result["score_pattern"])
             score_style = float(rule_result["score_style"])
-            reasons = _merge_model_rule_reasons(result.get("reasons") or [], rule_result.get("reasons") or [])
         else:
             score_total = model_total
             score_color = float(result["color_score"])
             score_texture = round(model_total * 0.95, 1)
             score_pattern = round(model_total * 0.95, 1)
             score_style = round(model_total * 0.95, 1)
-            reasons = result.get("reasons") or []
+
+        # 최종 총점·수정된 속성으로 피드백 재생성 (analyze_outfit 시점 점수와 불일치 방지)
+        reasons = generate_explanation(
+            attention_weights=_attention_weights_from_list(result.get("attention_weights")),
+            item_attrs=item_attrs,
+            colors=outfit_colors,
+            category_list=main_categories,
+            harmony_score=score_total,
+            request_attrs_main=request_attrs_main,
+        )
+        if rule_result is not None:
+            reasons = _merge_model_rule_reasons(
+                reasons,
+                rule_result.get("reasons") or [],
+                score_total,
+            )
+
+        if score_total < _LOW_SCORE_THRESHOLD:
+            clip_images = main_imgs + list(accessory_imgs)
+            if clip_images:
+                clip_neg = [
+                    line for line in generate_clip_feedback(clip_images)
+                    if "✓" not in line
+                ]
+                _prepend_unique_lines(reasons, clip_neg, max_add=2)
+
+        reasons = _replace_score_summary(reasons, score_total)
 
         elapsed = time.time() - start_time
 
@@ -747,6 +1257,8 @@ async def predict_harmony(request: HarmonyRequest):
                 "color_score":         result.get("color_score"),
                 "model_score_total":   model_total,
                 "rulebook_score":      rule_result,
+                "attention_weights":   result.get("attention_weights"),
+                "outfit_category_list": outfit_category_list,
             }
         )
 

@@ -28,7 +28,7 @@ const FEATURES = [
   },
   {
     title: '조화 예측',
-    desc: 'FashionHarmony 세트 모델과 색 조화(FashionCLIP), 룰북 점수를 결합해 코디 전체 조화 점수(0~100)와 피드백 문장을 제공합니다.',
+    desc: 'FashionHarmony 세트 모델·FashionCLIP 색 점수·룰북 규칙을 합쳐 0~100 점수를 내고, XAI 기반 피드백 말풍선으로 이유를 설명합니다.',
     icon: (
       <path
         strokeLinecap="round"
@@ -40,7 +40,7 @@ const FEATURES = [
   },
   {
     title: '속성 수정',
-    desc: '분석된 재질·패턴·스타일을 직접 고칠 수 있습니다. 수정하면 조화 점수가 자동으로 다시 계산됩니다.',
+    desc: '분석된 재질·패턴·스타일을 직접 고칠 수 있습니다. 수정·아이템 추가·삭제 시 점수와 피드백 문장이 자동으로 다시 생성됩니다.',
     icon: (
       <path
         strokeLinecap="round"
@@ -90,7 +90,7 @@ const STEPS = [
   {
     n: '3',
     title: '결과 확인',
-    desc: '아이템이 바뀔 때마다 조화 점수와 기니피그 피드백이 갱신됩니다. 필요하면 재질·패턴·스타일을 수정해 점수를 다시 볼 수 있습니다.',
+    desc: '아이템을 추가·삭제하거나 재질·패턴·스타일·색 정보가 바뀌면 조화 점수와 말풍선 피드백이 갱신됩니다. 위치만 옮긴 경우에는 점수 재계산을 생략합니다.',
   },
   {
     n: '4',
@@ -106,7 +106,7 @@ const GINI_MOODS = [
     label: '나쁨',
     range: '0 ~ 39점',
     anim: 'animate-harmony-gini-angry',
-    desc: '색·질감·패턴·스타일 조합이 어색할 수 있습니다. 아이템 교체나 속성 수정을 시도해 보세요.',
+    desc: '점수가 낮을 때 말풍선에 개선·부정 톤 문장(색·패턴·스타일 충돌 등)이 더 자주 표시됩니다. 아이템 교체나 속성 수정을 시도해 보세요.',
   },
   {
     src: '/assets/normal_gini.svg',
@@ -123,6 +123,25 @@ const GINI_MOODS = [
     range: '70 ~ 100점',
     anim: 'animate-harmony-gini-happy',
     desc: '전체적으로 잘 어울리는 코디입니다. 세부 점수와 피드백 문장도 함께 참고하세요.',
+  },
+] as const
+
+const XAI_SOURCES = [
+  {
+    title: 'Attention',
+    desc: '세트 조화 모델이 아이템끼리 어디에 주목했는지를 읽어, 예: 「상의와 하의의 조화가 코디의 핵심」처럼 관계 문장을 만듭니다.',
+  },
+  {
+    title: '색·재질·패턴·스타일',
+    desc: '추출·분류된 속성과 대표색을 규칙 템플릿으로 설명합니다. 점수가 60점 미만이면 「산만해 보일 수 있습니다」 등 개선 문장으로 바뀝니다.',
+  },
+  {
+    title: '룰북 규칙',
+    desc: '색상환·조합 점수표 기준으로 「조화롭지 않음」「충돌」 같은 이유를 붙입니다. 낮은 점수일 때 말풍선 앞쪽에 우선 노출됩니다.',
+  },
+  {
+    title: 'FashionCLIP',
+    desc: '코디 이미지와 문장을 비교해 색 점수에 반영하고, 점수가 낮을 때 「색상 톤이 맞지 않습니다」 같은 부정 피드백을 덧붙일 수 있습니다.',
   },
 ] as const
 
@@ -194,7 +213,7 @@ const Info = () => {
             </p>
             <p className="text-xs text-secondary leading-relaxed">
               HUWARI는 <span className="font-medium text-secondary">AI 기반 패션 분석</span>으로 아이템 특성을 읽고,
-              여러 벌을 한 코디로 묶었을 때의 조화를 점수와 문장으로 알려 줍니다.
+              여러 벌을 한 코디로 묶었을 때의 조화를 점수와 <span className="font-medium text-secondary">설명 가능한 피드백(XAI)</span> 문장으로 알려 줍니다.
             </p>
             <p className="text-xs text-secondary leading-relaxed">
               복잡한 패션 이론 대신, 캔버스에 올리고 점수를 보며{' '}
@@ -281,6 +300,39 @@ const Info = () => {
         </div>
 
         <div className="col-span-12 border-b border-secondary">
+          <SectionTitle>설명 가능 AI (XAI)</SectionTitle>
+          <div className="p-8 pt-5 space-y-6">
+            <p className="text-xs text-secondary leading-relaxed">
+              HUWARI는 숫자만 주지 않고, <span className="font-medium text-secondary">왜 그렇게 평가했는지</span>를
+              말풍선 피드백으로 설명합니다. 여러 신호를 합쳐 최대 약 7문장(마지막은 총점 요약)까지 보여 줍니다.
+            </p>
+            <div className="grid grid-cols-2 border border-secondary rounded-xl overflow-hidden">
+              {XAI_SOURCES.map((x, i) => (
+                <div
+                  key={x.title}
+                  className={`p-5 ${i % 2 === 0 ? 'border-r border-secondary' : ''} ${i < 2 ? 'border-b border-secondary' : ''}`}
+                >
+                  <h4 className="text-xs font-medium text-secondary uppercase tracking-wider mb-2">{x.title}</h4>
+                  <p className="text-xs text-secondary leading-relaxed">{x.desc}</p>
+                </div>
+              ))}
+            </div>
+            <div className="border border-secondary rounded-xl p-5">
+              <h4 className="text-xs font-medium text-secondary uppercase tracking-wider mb-2">말풍선 문장 순서</h4>
+              <ol className="text-xs text-secondary space-y-1.5 leading-relaxed list-decimal list-inside">
+                <li>아이템 관계(Attention, 메인 2장 이상·고점수일 때)</li>
+                <li>색감 설명(최대 2줄)</li>
+                <li>재질 → 패턴 → 스타일</li>
+                <li>총점 구간 요약(마지막 1줄)</li>
+              </ol>
+              <p className="text-[10px] text-secondary/70 mt-3 leading-relaxed">
+                Grad-CAM·Attention 히트맵 UI 등 이미지 위 시각적 설명은 현재 버전에 포함하지 않습니다.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="col-span-12 border-b border-secondary">
           <SectionTitle>조화 상태 표시</SectionTitle>
           <div className="p-8 pt-5">
             <p className="text-xs text-secondary leading-relaxed mb-6">
@@ -308,10 +360,19 @@ const Info = () => {
           <SectionTitle>점수 안내</SectionTitle>
           <div className="p-8 pt-5 space-y-4">
             <p className="text-xs text-secondary leading-relaxed">
-              <span className="font-medium text-secondary">총점(score_total)</span>은 FashionHarmony 세트 모델과 색
-              조화, 룰북 규칙을 함께 반영한 0~100 점수입니다. 아이템을 추가·이동·속성 수정하면 약 0.4초 후 자동으로
-              다시 계산됩니다.
+              <span className="font-medium text-secondary">총점(score_total)</span>은 FashionHarmony 세트 raw(75%)와
+              FashionCLIP 색 점수(25%)를 합친 뒤, 룰북 규칙과 50:50 병합할 수 있는 0~100 점수입니다. 아이템
+              추가·삭제·속성·색 변경 시 약 0.4초 후 점수와 말풍선 피드백이 다시 생성됩니다. 위치만 드래그한 경우에는
+              재계산하지 않습니다.
             </p>
+            <div className="border border-secondary rounded-xl p-5">
+              <h4 className="text-xs font-medium text-secondary uppercase tracking-wider mb-2">피드백 톤</h4>
+              <ul className="text-xs text-secondary space-y-1.5 leading-relaxed list-disc list-inside">
+                <li>60점 이상: 중립~긍정 설명 위주</li>
+                <li>60점 미만: 개선·부정 문장(색·패턴·스타일·룰북)이 더 자주 표시</li>
+                <li>40점 미만: 코디 밸런스 재정비 안내가 추가</li>
+              </ul>
+            </div>
             <div className="grid grid-cols-2 border border-secondary rounded-xl overflow-hidden">
               <div className="border-r border-secondary p-5">
                 <h4 className="text-xs font-medium text-secondary uppercase tracking-wider mb-2">메인 의류</h4>
@@ -340,8 +401,9 @@ const Info = () => {
                 { name: 'TypeScript', sub: '타입 안정성' },
                 { name: 'FastAPI', sub: '백엔드 API' },
                 { name: 'FashionHarmony', sub: '세트 조화 모델' },
-                { name: 'FashionCLIP', sub: '색·피드백' },
+                { name: 'FashionCLIP', sub: '색 점수·XAI 피드백' },
                 { name: 'OpenAI CLIP', sub: '의류 종류 분류' },
+                { name: '룰북', sub: '조합 규칙·설명' },
                 { name: 'PyTorch', sub: '딥러닝 추론' },
                 { name: 'Tailwind CSS', sub: '스타일링' },
               ].map((t, i) => (

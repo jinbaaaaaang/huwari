@@ -34,7 +34,7 @@ HUWARI는 "지금 가진 옷 조합이 잘 어울리는지"를 빠르게 확인�
 ### HUWARI가 제공하는 가치
 
 - 주관적 감각에 의존하던 코디 선택을 정량 지표로 보조
-- 색/질감/패턴/스타일 관점의 다각도 피드백 제공
+- 색/질감/패턴/스타일 관점의 다각도 피드백 제공 ([XAI 설명](#xai-explainability) 참고)
 - 코디 실험(아이템 교체)을 빠르게 반복할 수 있는 인터랙티브 UX 제공
 
 ---
@@ -382,8 +382,8 @@ flowchart TD
 - **카테고리 분리**: `beforeItems`·`afterItems`를 합쳐 이미지를 로드한 뒤, `category`가 없으면 **OpenAI CLIP**으로 `상의`·`하의`·`모자`·`신발`·`악세서리` 중 하나를 고른다. **신발·모자·악세서리**는 “악세서리 이미지” 목록으로만 색·피드백에 쓰이며, **FashionHarmony** Set 조화 텐서에는 **메인 의류만**(최대 4장) 넣는다. 메인이 비고 악세서리만 있으면 서버가 메인으로 옮겨 처리한다.
 - **총점 `score_total`**: 메인 최대 4장의 **FashionHarmony** raw(0~1)와, 메인+악세서리를 가로로 이은 이미지의 **FashionCLIP 색 점수**(0~1)를 **`harmony_raw × 0.75 + color × 0.25`** 로 합친 뒤 0~100으로 반올림한다.
 - **`score_color`**: 위 FashionCLIP 색 분기의 **퍼센트 값**(0~100 근사). **`score_texture`·`score_pattern`·`score_style`** 은 스키마 호환을 위해 **`score_total`의 약 0.95배**로 채우며, 축별 독립 추정은 아니다.
-- **`reasons`**: 총점 구간 안내 문장 + **`generate_clip_feedback`**(FashionCLIP)에서 나온 문장.
-- **`debug`**: 경과 시간, 메인/악세서리 이미지 수, `harmony_raw`, `color_score`, 메인 이미지별 `classify_attributes` 결과 등.
+- **`reasons`**: 말풍선 피드백 문장 배열. 생성 방식은 [XAI (설명 가능 AI)](#xai-explainability) 절을 본다.
+- **`debug`**: 경과 시간, 메인/악세서리 이미지 수, `harmony_raw`, `color_score`, **`attention_weights`**(아이템 간 attention 행렬), 메인 이미지별 `classify_attributes` 결과 등.
 
 #### 5.4 응답·운용 시 유의사항
 
@@ -412,6 +412,124 @@ UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 �
 
 ---
 
+<a id="xai-explainability"></a>
+## XAI (설명 가능 AI)
+
+HUWARI는 조화 **점수만 숫자로 주는 것**이 아니라, **왜 그렇게 보였는지**를 `reasons` 말풍선과 `debug` 필드로 설명한다. 구현은 `main.py`의 **`generate_explanation`** 파이프라인이 중심이며, 모델 내부 신호·규칙·멀티모달 문장을 **한국어 문장**으로 합성한다.
+
+### XAI가 답하는 질문
+
+| 질문 | 설명 수단 |
+|------|-----------|
+| 어떤 아이템 관계가 중요한가? | Set Transformer **self-attention** → `_explain_attention` |
+| 색·재질·패턴·스타일은 어떤가? | 속성 분류 + **규칙 템플릿** (`_explain_colors` 등) |
+| 룰북 기준으로 어디가 어색한가? | `harmony.py` **`calculate_harmony_score`** reason 병합 |
+| 색 조화는 이미지 기준으로? | **FashionCLIP** 색 점수 + (저점수 시) 부정 문장 |
+| 전체적으로 괜찮은가 / 고칠 곳은? | **총점 구간 요약** + 저점수 시 **개선·부정 톤** |
+
+### 피드백 생성 파이프라인
+
+`POST /api/predict-harmony` 응답 직전에, 최종 `score_total`을 기준으로 `reasons`를 **다시 조립**한다(속성 수정·룰북 병합 반영).
+
+```mermaid
+flowchart TB
+  FH[FashionHarmonyModel<br/>조화 raw + 속성 헤드]
+  ATN[get_attention_weights<br/>Set Transformer 1레이어]
+  FC[FashionCLIP<br/>색 점수 25%]
+  RB[harmony.py 룰북<br/>50% 병합 시]
+  GE[generate_explanation]
+  CLIP_FB[generate_clip_feedback<br/>score_total &lt; 60]
+  OUT[reasons 말풍선]
+
+  FH --> ATN
+  FH --> GE
+  ATN --> GE
+  FC --> SC[score_total 합성]
+  RB --> SC
+  FH --> SC
+  SC --> GE
+  RB --> MERGE[_merge_model_rule_reasons]
+  GE --> MERGE
+  MERGE --> CLIP_FB
+  CLIP_FB --> SUM[_replace_score_summary]
+  MERGE --> SUM
+  SUM --> OUT
+```
+
+### 1. Attention 기반 설명 (모델 내부 XAI)
+
+- **함수**: `get_attention_weights` → `_explain_attention`
+- **방식**: `FashionHarmonyModel` Set Transformer **첫 번째 레이어 self-attention** 가중치에서, 유효 메인 아이템(최대 4장) 간 **가장 강한 쌍**을 찾는다.
+- **출력 예**: 「상의와 하의의 조화가 코디의 핵심 요소입니다」, 「아우터와 상의의 레이어링이 포인트입니다」
+- **조건**: 메인 아이템이 **2장 이상**일 때만 생성. **`score_total` &lt; 60** 이면 긍정적 attention 문장은 넣지 않고, 대신 개선·부정 문장 비중을 높인다.
+- **UI**: 문장만 표시. 행렬 원본은 응답 **`debug.attention_weights`** 에만 포함(히트맵 UI 없음).
+
+### 2. 속성·색 규칙 템플릿 (해석 가능 규칙 XAI)
+
+- **함수**: `generate_explanation` 내 `_explain_colors`, `_explain_texture`, `_explain_pattern`, `_explain_style`
+- **입력**: 메인 아이템별 **재질·패턴·스타일**(모델 `classify_attributes` + 요청의 UI 수정값 `request_attrs_main` 우선), 캔버스 **대표색**(`extract-colors` → `beforeItems.colors`)
+- **톤**:
+  - **`score_total` ≥ 60**: 중립~긍정 (예: 「미니멀 스타일이 통일된 깔끔한 코디입니다」)
+  - **`score_total` &lt; 60**: 개선·부정 (예: 「패턴이 겹쳐 시선이 분산됩니다」, 「스타일이 부딪혀 일관되지 않습니다」)
+  - **`score_total` &lt; 40**: 추가로 「코디 밸런스를 다시 맞춰 볼 필요」 등 강한 안내
+- **문장 순서**: Attention(고점수만) → 색(최대 2줄) → 재질 → 패턴 → 스타일 → **총점 구간 요약**(마지막 1줄). 최대 **7줄**(`_FEEDBACK_MAX_LINES` + 요약).
+
+### 3. 룰북 설명 (`harmony.py`)
+
+- **함수**: `calculate_harmony_score` → `_merge_model_rule_reasons`
+- **내용**: 색상환·채도/명도 차이, 재질·패턴·스타일 **조합 점수표**에 따른 reason (예: 「재질: 면와(과) 가죽 조합이 조화롭지 않음」, 「채도 차이가 커 조화가 어려움」)
+- **병합**: `before_rule_items`가 있을 때 모델 점수와 **50:50** 병합 후, **`score_total` &lt; 60** 이면 **부정 reason을 앞쪽에 우선** 배치한다.
+- **필터**: 「중립으로 계산」 등 내부용 문장은 `_is_user_facing_reason`으로 말풍선에서 제외한다.
+
+### 4. FashionCLIP 멀티모달 설명
+
+- **색 점수**: `get_clip_color_score` — 코디 이미지(메인+악세서리 가로 합성)와 「조화로운 색 / 충돌하는 색」 문장 유사도 → 총점의 **25%** 가중 (`harmony_raw` 75%)
+- **부정 피드백 문장**: `generate_clip_feedback` — **`score_total` &lt; 60** 일 때만, ✓ 없는 부정 라벨(예: 「색상 톤이 맞지 않습니다」)을 최대 2개 `reasons` 앞쪽에 삽입
+- **로딩**: `open-clip-torch`의 `hf-hub:Marqo/marqo-fashionCLIP` (`get_clip_model`)
+
+### 5. 총점 구간 요약 (캘리브레이션된 narrative XAI)
+
+| `score_total` | 마지막 요약 문장 성격 |
+|---------------|------------------------|
+| ≥ 80 | 완성도 높음 |
+| ≥ 60 | 균형 잡힘 |
+| ≥ 40 | 일부 교체·조정 제안 |
+| &lt; 40 | 색·스타일 통일감 개선 제안 |
+
+### `debug`에서 확인할 수 있는 XAI 원천
+
+| 필드 | 의미 |
+|------|------|
+| `attention_weights` | 아이템×아이템 attention 행렬(JSON) |
+| `item_attrs` | 메인 이미지별 재질·패턴·스타일·카테고리 분류 |
+| `request_attrs_main` | UI에서 수정해 반영된 속성 |
+| `harmony_raw` | FashionHarmony sigmoid raw |
+| `color_score` | FashionCLIP 색 분기 |
+| `rulebook_score` | 룰북 병합 시 `calculate_harmony_score` 전체 결과 |
+
+프론트(Home)는 기본적으로 **`reasons`만** 말풍선에 표시하며, `debug`는 개발·검증용이다.
+
+### 현재 범위에 **포함하지 않는** XAI (로드맵)
+
+아래는 **필수 기능이 아니며** 현재 릴리스에 없다. 필요 시 별도 이슈로 확장한다.
+
+| 항목 | 상태 | 비고 |
+|------|------|------|
+| Grad-CAM / SHAP 이미지 하이라이트 | 미구현 | 연산·해석 비용 큼, 코디 다장 구조와 궁합 제한적 |
+| Attention **히트맵 UI** | 미구현 | `debug.attention_weights`만 제공, 문장 설명으로 대체 |
+| 조화 raw의 **수식 단위 기여도 분해** | 미구현 | Set Transformer 출력은 블랙박스; 대신 점수 합성 비율·`reasons`·룰북으로 설명 |
+
+### 관련 소스
+
+| 파일 | 역할 |
+|------|------|
+| `main.py` | `get_attention_weights`, `generate_explanation`, `generate_clip_feedback`, `_merge_model_rule_reasons` |
+| `harmony.py` | 규칙 기반 색·재질·패턴·스타일 reason |
+| `models/fashion_harmony.py` | Set Transformer·속성 헤드 |
+| `src/pages/Home.tsx` | `reasons` → 피드백 말풍선 렌더 |
+
+---
+
 ### 참고문헌
 
 1. Vasileva, M., Plummer, B. A., Dusad, K., Rajpal, S., Kumar, R., & Forsyth, D. (2018). **Learning Type-Aware Embeddings for Fashion Compatibility**. *ECCV 2018*. [https://arxiv.org/pdf/1803.09196](https://arxiv.org/pdf/1803.09196)
@@ -434,7 +552,7 @@ UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 �
   - 출력 항목:
     - 총점(`score_total`): FashionHarmony 세트 raw와 FashionCLIP 색 점수를 **75% / 25%**로 합성한 0~100 점수.
     - 세부 점수: `score_color`(FashionCLIP 색), `score_texture`·`score_pattern`·`score_style`(스키마 호환용으로 `score_total`의 약 0.95배).
-    - 해석 문장(`reasons`) 및 디버그 정보(`debug`).
+    - 해석 문장(`reasons`) 및 디버그 정보(`debug`). XAI 상세는 [XAI (설명 가능 AI)](#xai-explainability) 절.
 - **패션 속성 분류(통합 모델)**
   - **`FashionHarmonyModel`**의 속성 헤드로 재질·패턴·스타일·카테고리(한국어 클래스)를 예측한다(`POST /api/classify-fashion-attributes`).
 - **의류 타입 분류(슬롯용)**

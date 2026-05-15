@@ -238,7 +238,7 @@ const ItemPlacementArea = ({
         }
 
         const newItem: PlacedItem = {
-          id: Date.now().toString(),
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
           imageUrl: bgData.image,
           x: position.x,      // 가이드 라인 x 위치 (퍼센트)
           y: position.y,      // 가이드 라인 y 위치 (퍼센트)
@@ -247,9 +247,15 @@ const ItemPlacementArea = ({
           category: clothingType,
         }
 
-        // 처리 완료된 아이템을 화면에 추가
-        setPlacedItems(prev => [...prev, newItem])
-        
+        // 처리 완료된 아이템을 화면에 추가 (부모에 즉시 반영 → 조화·피드백 재생성)
+        setPlacedItems((prev) => {
+          const next = [...prev, newItem]
+          const json = JSON.stringify(next)
+          prevPlacedJsonRef.current = json
+          onItemsChange?.(next)
+          return next
+        })
+
         // 처리 중 카운트 감소
         setProcessingCount(prev => Math.max(0, prev - 1))
 
@@ -274,13 +280,13 @@ const ItemPlacementArea = ({
     }
   }
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (files && files.length > 0) {
-      // 여러 파일을 동시에 처리 (각 파일은 독립적으로 처리됨)
-      Array.from(files).forEach(file => {
-        handleFileSelect(file)
-      })
+      // 여러 장 동시 업로드 시 배경 제거·분류 API가 겹치면 CPU 부하로 실패할 수 있어 순차 처리
+      for (const file of Array.from(files)) {
+        await handleFileSelect(file)
+      }
     }
     // 같은 파일을 다시 선택할 수 있도록 리셋
     if (fileInputRef.current) {
@@ -293,7 +299,13 @@ const ItemPlacementArea = ({
   }
 
   const handleRemoveItem = (id: string) => {
-    setPlacedItems(placedItems.filter(item => item.id !== id))
+    const next = placedItems.filter((item) => item.id !== id)
+    setPlacedItems(next)
+    // 마지막 아이템 삭제 시 placedItems=[] 이지만 initialItems는 아직 남아 있어
+    // 동기화 effect가 빈 배열을 올리지 않음 → 분석 결과가 남는 문제 방지
+    const json = JSON.stringify(next)
+    prevPlacedJsonRef.current = json
+    onItemsChange?.(next)
   }
 
   // 색상 추출 함수 (비동기, 배경 제거와 위치 판별 완료 후 실행)
@@ -401,6 +413,16 @@ const ItemPlacementArea = ({
     }
   }
 
+  /** 최근에 만진 아이템이 위에 오도록 배열 맨 뒤로 이동 */
+  const bringItemToFront = (itemId: string) => {
+    setPlacedItems((prev) => {
+      const idx = prev.findIndex((i) => i.id === itemId)
+      if (idx < 0 || idx === prev.length - 1) return prev
+      const item = prev[idx]
+      return [...prev.slice(0, idx), ...prev.slice(idx + 1), item]
+    })
+  }
+
   const handleMouseDown = (e: React.MouseEvent, itemId: string) => {
     // 리사이즈 중이면 드래그 시작하지 않음
     if (resizingItem) {
@@ -415,6 +437,8 @@ const ItemPlacementArea = ({
     const containerRect = containerRef.current.getBoundingClientRect()
     const item = placedItems.find(i => i.id === itemId)
     if (!item) return
+
+    bringItemToFront(itemId)
     
     // 현재 아이템의 실제 위치 계산
     const itemX = (item.x / 100) * containerRect.width
@@ -434,6 +458,8 @@ const ItemPlacementArea = ({
     
     const item = placedItems.find(i => i.id === itemId)
     if (!item) return
+
+    bringItemToFront(itemId)
     
     setResizingItem(itemId)
     setResizeStart({
@@ -759,22 +785,20 @@ const ItemPlacementArea = ({
         )}
 
         {/* 배치된 아이템들 (처리 완료된 것만 표시) */}
-        {placedItems.map((item) => {
+        {placedItems.map((item, stackIndex) => {
           const isEntering = enteringItemIds.has(item.id)
           const isDragging = draggingItem === item.id
+          const isActive = isDragging || resizingItem === item.id
           return (
           <div
             key={item.id}
-            className={`absolute cursor-move group ${
-              isDragging || resizingItem === item.id
-                ? 'z-[110]'
-                : 'z-20 hover:z-[100]'
-            } ${isEntering ? 'animate-item-drop-in' : ''}`}
+            className={`absolute cursor-move group ${isEntering ? 'animate-item-drop-in' : ''}`}
             style={{
               left: `${item.x}%`,
               top: `${item.y}%`,
               width: `${item.width}px`,
               height: `${item.height}px`,
+              zIndex: isActive ? 110 : 20 + stackIndex,
               ...(isEntering ? {} : { transform: 'translate(-50%, 0)' }),
               opacity: isDragging ? 0.8 : undefined,
             }}
