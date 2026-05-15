@@ -26,8 +26,59 @@
   animation: gentleBounce 2s ease-in-out infinite;
 }
 
+/* 조화 상태 패널 기니피그 — 상하 부드러운 반동 */
+@keyframes harmonyGiniFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.animate-harmony-gini {
+  animation: harmonyGiniFloat 2.1s ease-in-out infinite;
+}
+
+.animate-harmony-gini-happy {
+  animation: harmonyGiniFloat 1.65s ease-in-out infinite;
+}
+
+.animate-harmony-gini-angry {
+  animation: harmonyGiniFloat 2.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-harmony-gini,
+  .animate-harmony-gini-happy,
+  .animate-harmony-gini-angry {
+    animation: none;
+  }
+}
+
 .animate-fadeIn {
   animation: fadeIn 0.3s ease-out;
+}
+
+/* 코디 캔버스 아이템 등장 — translate(-50%,0) 앵커와 함께 사용 */
+@keyframes itemDropIn {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -20px) scale(0.9);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-50%, 4px) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+.animate-item-drop-in {
+  animation: itemDropIn 0.48s cubic-bezier(0.34, 1.25, 0.64, 1) forwards;
 }
 
 @keyframes cursor-star {

@@ -375,18 +375,33 @@ function Home() {
   }, [beforeItems, afterItems])
 
   // 조화 상태 영역 전용: 점수 구간별 표정 (0~39 화남, 40~69 보통, 70~100 행복). 피드백 줄 기니는 항상 normal.
-  const getHarmonyStateCharacterImage = () => {
-    if (!harmonyScore) return '/assets/normal_gini.svg'
-
+  const harmonyGiniMood = useMemo((): 'neutral' | 'angry' | 'normal' | 'happy' => {
+    if (!harmonyScore) return 'neutral'
     const score = harmonyScore.score_total
-    if (score < 40) {
-      return '/assets/angry_gini.svg'
+    if (score < 40) return 'angry'
+    if (score < 70) return 'normal'
+    return 'happy'
+  }, [harmonyScore])
+
+  const getHarmonyStateCharacterImage = () => {
+    switch (harmonyGiniMood) {
+      case 'angry':
+        return '/assets/angry_gini.svg'
+      case 'happy':
+        return '/assets/happy_gini.svg'
+      case 'neutral':
+      case 'normal':
+      default:
+        return '/assets/normal_gini.svg'
     }
-    if (score < 70) {
-      return '/assets/normal_gini.svg'
-    }
-    return '/assets/happy_gini.svg'
   }
+
+  const harmonyGiniAnimClass =
+    harmonyGiniMood === 'happy'
+      ? 'animate-harmony-gini-happy'
+      : harmonyGiniMood === 'angry'
+        ? 'animate-harmony-gini-angry'
+        : 'animate-harmony-gini'
 
   const stopWebcam = () => {
     if (webcamStreamRef.current) {
@@ -904,9 +919,10 @@ function Home() {
                   <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
                     <div className="w-28 h-28 bg-secondary flex items-center justify-center rounded-full mb-2">
                       <img
+                        key={harmonyGiniMood}
                         src={getHarmonyStateCharacterImage()}
                         alt="Gini"
-                        className="w-20 h-20"
+                        className={`w-20 h-20 ${harmonyGiniAnimClass}`}
                         onError={(e) => {
                           const target = e.target as HTMLImageElement
                           target.src = '/assets/normal_gini.svg'

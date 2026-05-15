@@ -80,6 +80,27 @@ const ItemPlacementArea = ({
   const prevInitialItemsKeyRef = useRef<string>(initialItemsKey)
   const isInitialMountRef = useRef(true)
   const prevPlacedJsonRef = useRef<string | null>(null)
+  const prevPlacedItemIdsRef = useRef<Set<string> | null>(null)
+  const suppressEnterAnimationRef = useRef(false)
+  const [enteringItemIds, setEnteringItemIds] = useState<Set<string>>(() => new Set())
+
+  const markItemsEntering = (ids: string[]) => {
+    if (ids.length === 0) return
+    setEnteringItemIds((prev) => {
+      const next = new Set(prev)
+      ids.forEach((id) => next.add(id))
+      return next
+    })
+  }
+
+  const clearItemEntering = (id: string) => {
+    setEnteringItemIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
 
   // initialItems가 변경되면 placedItems 업데이트
   useEffect(() => {
@@ -87,14 +108,41 @@ const ItemPlacementArea = ({
     if (initialItemsKey !== prevInitialItemsKeyRef.current || isInitialMountRef.current) {
       console.log('ItemPlacementArea initialItems 변경:', initialItems)
       prevInitialItemsKeyRef.current = initialItemsKey
+      const wasInitialMount = isInitialMountRef.current
       isInitialMountRef.current = false
       
       if (initialItems !== undefined) {
         console.log('placedItems 업데이트:', initialItems)
+        const addedFromParent = initialItems.filter(
+          (i) => !placedItems.some((p) => p.id === i.id)
+        )
+        const shouldSuppressEnter = wasInitialMount || addedFromParent.length > 1
+        if (shouldSuppressEnter) suppressEnterAnimationRef.current = true
         setPlacedItems([...initialItems])
       }
     }
-  }, [initialItems, initialItemsKey])
+  }, [initialItems, initialItemsKey, placedItems])
+
+  // 새로 추가된 아이템에만 등장 애니메이션 (히스토리·LS 복원 제외)
+  useEffect(() => {
+    const currentIds = placedItems.map((i) => i.id)
+    const currentSet = new Set(currentIds)
+
+    if (suppressEnterAnimationRef.current) {
+      suppressEnterAnimationRef.current = false
+      prevPlacedItemIdsRef.current = currentSet
+      return
+    }
+
+    if (prevPlacedItemIdsRef.current === null) {
+      prevPlacedItemIdsRef.current = currentSet
+      return
+    }
+
+    const newIds = currentIds.filter((id) => !prevPlacedItemIdsRef.current!.has(id))
+    prevPlacedItemIdsRef.current = currentSet
+    markItemsEntering(newIds)
+  }, [placedItems])
 
   // placedItems 변경 시 상위에 동기화 (texture/pattern/style 등 id 외 필드만 바뀐 경우 포함)
   // 히스토리 불러오기 등: 부모가 initialItems를 준 직후 placedItems는 아직 []인 틱이 있어,
@@ -682,7 +730,7 @@ const ItemPlacementArea = ({
 
         {/* 통합 처리 중 표시 (화면 중앙) */}
         {processingCount > 0 && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 rounded-lg p-8 bg-[#FAFAF8] border border-secondary">
+          <div className="absolute top-2/3 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 rounded-lg p-8 bg-[#FAFAF8] border border-secondary">
             <div className="text-center">
               {/* 기니피그 이미지 - 부드러운 바운스 애니메이션 */}
               <div className="w-20 h-20 mx-auto mb-4">
@@ -711,22 +759,26 @@ const ItemPlacementArea = ({
         )}
 
         {/* 배치된 아이템들 (처리 완료된 것만 표시) */}
-        {placedItems.map((item) => (
+        {placedItems.map((item) => {
+          const isEntering = enteringItemIds.has(item.id)
+          const isDragging = draggingItem === item.id
+          return (
           <div
             key={item.id}
             className={`absolute cursor-move group ${
-              draggingItem === item.id || resizingItem === item.id
+              isDragging || resizingItem === item.id
                 ? 'z-[110]'
                 : 'z-20 hover:z-[100]'
-            }`}
+            } ${isEntering ? 'animate-item-drop-in' : ''}`}
             style={{
               left: `${item.x}%`,
               top: `${item.y}%`,
-              transform: 'translate(-50%, 0)',
               width: `${item.width}px`,
               height: `${item.height}px`,
-              opacity: draggingItem === item.id ? 0.8 : 1,
+              ...(isEntering ? {} : { transform: 'translate(-50%, 0)' }),
+              opacity: isDragging ? 0.8 : undefined,
             }}
+            onAnimationEnd={() => clearItemEntering(item.id)}
             onMouseDown={(e) => handleMouseDown(e, item.id)}
           >
             <img
@@ -807,7 +859,8 @@ const ItemPlacementArea = ({
               )}
             </div>
           </div>
-        ))}
+          )
+        })}
 
         {/* 안내 문구 영역 (아이템이 없을 때만 표시) */}
         {placedItems.length === 0 && (
