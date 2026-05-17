@@ -34,9 +34,32 @@ interface HarmonyScore {
   debug: any
 }
 
+interface WebcamBbox {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
 interface WebcamCropItem {
   category: string
   imageBase64: string | null
+  crop_method?: string
+  bbox?: WebcamBbox
+}
+
+interface WebcamOverlayBox {
+  category: string
+  bbox: WebcamBbox
+  role: 'person' | 'crop' | 'full'
+}
+
+interface WebcamLiveItem {
+  category: string
+  texture?: string | null
+  pattern?: string | null
+  style?: string | null
+  colors?: Array<{ hex: string; percentage: number; rgb: number[] }>
 }
 
 interface WebcamHarmonyResponse {
@@ -45,8 +68,131 @@ interface WebcamHarmonyResponse {
   harmony_sigmoid_raw?: number
   color_score?: number
   reasons?: string[]
+  live_items?: WebcamLiveItem[]
   crop_items?: WebcamCropItem[]
+  overlay_boxes?: WebcamOverlayBox[]
+  frame_width?: number
+  frame_height?: number
+  crop_method?: string
   error?: string
+}
+
+function aggregateFashionFromLiveItems(items: WebcamLiveItem[]) {
+  const textures: string[] = []
+  const patterns: string[] = []
+  const styles: string[] = []
+  for (const item of items) {
+    if (item.category === '신발') continue
+    if (item.texture) textures.push(item.texture)
+    if (item.pattern) patterns.push(item.pattern)
+    if (item.style) styles.push(item.style)
+  }
+  const getMostCommon = (arr: string[]) => {
+    if (arr.length === 0) return null
+    const counts: Record<string, number> = {}
+    arr.forEach(v => {
+      counts[v] = (counts[v] || 0) + 1
+    })
+    return Object.keys(counts).reduce((a, b) => (counts[a] > counts[b] ? a : b))
+  }
+  const unique = (arr: string[]) => Array.from(new Set(arr))
+  return {
+    texture: getMostCommon(textures),
+    pattern: getMostCommon(patterns),
+    style: getMostCommon(styles),
+    allTextures: unique(textures),
+    allPatterns: unique(patterns),
+    allStyles: unique(styles),
+  }
+}
+
+function aggregateColorsFromLiveItems(items: WebcamLiveItem[]) {
+  const allColors: Array<{ hex: string; percentage: number; rgb: number[] }> = []
+  for (const item of items) {
+    for (const c of item.colors ?? []) {
+      allColors.push({ hex: c.hex, percentage: c.percentage, rgb: c.rgb })
+    }
+  }
+  if (allColors.length === 0) return []
+  const colorMap = new Map<string, { hex: string; totalPercentage: number; rgb: number[] }>()
+  allColors.forEach(color => {
+    const existing = colorMap.get(color.hex)
+    if (existing) existing.totalPercentage += color.percentage
+    else
+      colorMap.set(color.hex, {
+        hex: color.hex,
+        totalPercentage: color.percentage,
+        rgb: color.rgb,
+      })
+  })
+  return Array.from(colorMap.values())
+    .sort((a, b) => b.totalPercentage - a.totalPercentage)
+    .slice(0, 5)
+    .map(c => ({ hex: c.hex, percentage: c.totalPercentage, rgb: c.rgb }))
+}
+
+/** 웹캠 오버레이 — 사이트 컬러(secondary·primary·cream) 점선 + 연한 배경 */
+const WEBCAM_BOX_STYLES: Record<
+  string,
+  { border: string; bg: string; label: string; chip: string }
+> = {
+  상의: {
+    border: 'border-secondary',
+    bg: 'bg-secondary/35',
+    label: '상의',
+    chip: 'bg-secondary/90 text-cream',
+  },
+  하의: {
+    border: 'border-primary-dark',
+    bg: 'bg-primary/40',
+    label: '하의',
+    chip: 'bg-primary text-secondary',
+  },
+  신발: {
+    border: 'border-secondary-light',
+    bg: 'bg-secondary-light/30',
+    label: '신발',
+    chip: 'bg-secondary-light/95 text-cream',
+  },
+  전체: {
+    border: 'border-secondary/70',
+    bg: 'bg-cream/30',
+    label: '전체',
+    chip: 'bg-secondary/90 text-cream',
+  },
+}
+
+/** object-cover + 좌우 반전(-scale-x-100) 프리뷰에 맞춰 bbox를 % 좌표로 변환 */
+function mapWebcamBboxToOverlay(
+  bbox: WebcamBbox,
+  frameW: number,
+  frameH: number,
+  containerW: number,
+  containerH: number,
+  mirrorX: boolean,
+) {
+  if (frameW <= 0 || frameH <= 0 || containerW <= 0 || containerH <= 0) return null
+  const scale = Math.max(containerW / frameW, containerH / frameH)
+  const dispW = frameW * scale
+  const dispH = frameH * scale
+  const ox = (containerW - dispW) / 2
+  const oy = (containerH - dispH) / 2
+  let x1 = ox + bbox.x1 * scale
+  let x2 = ox + bbox.x2 * scale
+  const y1 = oy + bbox.y1 * scale
+  const y2 = oy + bbox.y2 * scale
+  if (mirrorX) {
+    const nx1 = containerW - x2
+    const nx2 = containerW - x1
+    x1 = nx1
+    x2 = nx2
+  }
+  return {
+    left: `${(x1 / containerW) * 100}%`,
+    top: `${(y1 / containerH) * 100}%`,
+    width: `${((x2 - x1) / containerW) * 100}%`,
+    height: `${((y2 - y1) / containerH) * 100}%`,
+  }
 }
 
 const LS_ITEMS = 'currentItems'
@@ -128,7 +274,9 @@ function readInitialBeforeItemsFromStorage(): PlacedItem[] {
 const FEEDBACK_MIN_ROWS = 4
 
 /** 웹캠 실시간 조화 분석 주기 (ms) */
-const WEBCAM_LIVE_INTERVAL_MS = 5000
+const WEBCAM_LIVE_INTERVAL_MS = 10000
+/** 서버 전송용 캡처 최대 너비 (추론 속도) */
+const WEBCAM_CAPTURE_MAX_WIDTH = 640
 
 function Home() {
   const location = useLocation()
@@ -156,11 +304,18 @@ function Home() {
   const [webcamLiveScore, setWebcamLiveScore] = useState<number | null>(null)
   const [webcamVideoReady, setWebcamVideoReady] = useState(false)
   const [isWebcamLiveLoading, setIsWebcamLiveLoading] = useState(false)
+  const [webcamOverlayBoxes, setWebcamOverlayBoxes] = useState<WebcamOverlayBox[]>([])
+  const [webcamFrameSize, setWebcamFrameSize] = useState({ w: 0, h: 0 })
+  const [webcamPreviewSize, setWebcamPreviewSize] = useState({ w: 0, h: 0 })
+  const [webcamCropMethod, setWebcamCropMethod] = useState<string | null>(null)
+  const [webcamLiveItems, setWebcamLiveItems] = useState<WebcamLiveItem[] | null>(null)
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null)
+  const webcamPreviewRef = useRef<HTMLDivElement | null>(null)
   const webcamStreamRef = useRef<MediaStream | null>(null)
   const webcamIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const webcamAnalyzingRef = useRef(false)
+  const webcamRequestSeqRef = useRef(0)
   const isCameraOnRef = useRef(false)
   const inputModeRef = useRef(inputMode)
   inputModeRef.current = inputMode
@@ -348,6 +503,33 @@ function Home() {
       .slice(0, 5)
   }, [beforeItems])
 
+  const useWebcamLiveAnalysis =
+    inputMode === 'webcam' && isCameraOn && (webcamLiveItems?.length ?? 0) > 0
+
+  const displayTopColors = useMemo(() => {
+    if (useWebcamLiveAnalysis && webcamLiveItems) {
+      return aggregateColorsFromLiveItems(webcamLiveItems)
+    }
+    return beforeTopColors
+  }, [useWebcamLiveAnalysis, webcamLiveItems, beforeTopColors])
+
+  const displayFashionAttributes = useMemo(() => {
+    if (useWebcamLiveAnalysis && webcamLiveItems) {
+      return aggregateFashionFromLiveItems(webcamLiveItems)
+    }
+    return beforeFashionAttributes
+  }, [useWebcamLiveAnalysis, webcamLiveItems, beforeFashionAttributes])
+
+  const displayAccessoryOnlyOutfit = useMemo(() => {
+    if (useWebcamLiveAnalysis && webcamLiveItems) {
+      return (
+        webcamLiveItems.length > 0 &&
+        webcamLiveItems.every(i => i.category === '신발')
+      )
+    }
+    return accessoryOnlyOutfit
+  }, [useWebcamLiveAnalysis, webcamLiveItems, accessoryOnlyOutfit])
+
   /** 조화 재계산 — 구성(추가·삭제) + 속성·색·이미지 변경. 위치·크기만 바뀌면 생략 */
   const harmonyInputSig = useMemo(() => itemSignature(beforeItems), [beforeItems])
   const itemCompositionSig = useMemo(
@@ -362,10 +544,21 @@ function Home() {
   const webcamStatusMessage = useMemo(() => {
     if (!isWebcamLiveActive) return ''
     if (!webcamVideoReady) return '카메라 화면을 준비하는 중입니다…'
-    if (isWebcamLiveLoading) return '실시간 코디를 분석하는 중입니다… (수 초 걸릴 수 있어요)'
-    if (webcamLiveScore == null) return '실시간 분석을 시작합니다…'
+    if (isWebcamLiveLoading) {
+      return '실시간 코디를 분석하는 중입니다… (첫 분석은 20~40초, 이후는 더 빠릅니다)'
+    }
+    if (webcamLiveScore == null) {
+      const hint = harmonyScore?.reasons?.[0]
+      return hint || '상의·하의가 화면에 보이도록 촬영해 주세요. (상의만 있어도 됩니다)'
+    }
     return ''
-  }, [isWebcamLiveActive, webcamVideoReady, isWebcamLiveLoading, webcamLiveScore])
+  }, [
+    isWebcamLiveActive,
+    webcamVideoReady,
+    isWebcamLiveLoading,
+    webcamLiveScore,
+    harmonyScore?.reasons,
+  ])
 
   const feedbackRows = useMemo(() => {
     if (inputMode === 'webcam') {
@@ -503,12 +696,15 @@ function Home() {
 
   // 조화 상태 영역 전용: 점수 구간별 표정 (0~39 화남, 40~69 보통, 70~100 행복). 피드백 줄 기니는 항상 normal.
   const harmonyGiniMood = useMemo((): 'neutral' | 'angry' | 'normal' | 'happy' => {
-    if (!harmonyScore) return 'neutral'
-    const score = harmonyScore.score_total
+    const score =
+      inputMode === 'webcam' && webcamLiveScore != null
+        ? webcamLiveScore
+        : harmonyScore?.score_total
+    if (score == null) return 'neutral'
     if (score < 40) return 'angry'
     if (score < 70) return 'normal'
     return 'happy'
-  }, [harmonyScore])
+  }, [harmonyScore, inputMode, webcamLiveScore])
 
   const getHarmonyStateCharacterImage = () => {
     switch (harmonyGiniMood) {
@@ -551,7 +747,45 @@ function Home() {
     setWebcamLiveScore(null)
     setWebcamVideoReady(false)
     setIsWebcamLiveLoading(false)
+    setWebcamOverlayBoxes([])
+    setWebcamFrameSize({ w: 0, h: 0 })
+    setWebcamCropMethod(null)
+    setWebcamLiveItems(null)
   }
+
+  const measureWebcamPreview = () => {
+    const container = webcamPreviewRef.current
+    const video = webcamVideoRef.current
+    if (!container) return
+    setWebcamPreviewSize({
+      w: container.clientWidth,
+      h: container.clientHeight,
+    })
+    if (video?.videoWidth && video.videoHeight) {
+      setWebcamFrameSize(prev =>
+        prev.w > 0 ? prev : { w: video.videoWidth, h: video.videoHeight },
+      )
+    }
+  }
+
+  useLayoutEffect(() => {
+    if (!isCameraOn || inputMode !== 'webcam') return
+    measureWebcamPreview()
+    const container = webcamPreviewRef.current
+    const video = webcamVideoRef.current
+    const ro =
+      typeof ResizeObserver !== 'undefined' && container
+        ? new ResizeObserver(() => measureWebcamPreview())
+        : null
+    if (container && ro) ro.observe(container)
+    video?.addEventListener('loadedmetadata', measureWebcamPreview)
+    window.addEventListener('resize', measureWebcamPreview)
+    return () => {
+      ro?.disconnect()
+      video?.removeEventListener('loadedmetadata', measureWebcamPreview)
+      window.removeEventListener('resize', measureWebcamPreview)
+    }
+  }, [isCameraOn, inputMode, webcamOverlayBoxes, webcamFrameSize.w])
 
   const waitForVideoFrames = (video: HTMLVideoElement) =>
     new Promise<void>(resolve => {
@@ -599,11 +833,17 @@ function Home() {
     const video = webcamVideoRef.current
     if (!video || !isCameraOnRef.current) return null
     if (video.readyState < 2 || video.videoWidth === 0) return null
+    const srcW = video.videoWidth || 1280
+    const srcH = video.videoHeight || 720
+    const scale = srcW > WEBCAM_CAPTURE_MAX_WIDTH ? WEBCAM_CAPTURE_MAX_WIDTH / srcW : 1
     const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth || 1280
-    canvas.height = video.videoHeight || 720
+    canvas.width = Math.round(srcW * scale)
+    canvas.height = Math.round(srcH * scale)
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
+    // 화면(-scale-x-100)과 동일한 좌표로 서버에 전달
+    ctx.translate(canvas.width, 0)
+    ctx.scale(-1, 1)
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
     return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85))
   }
@@ -621,10 +861,45 @@ function Home() {
   }
 
   const applyWebcamHarmonyToScore = (data: WebcamHarmonyResponse) => {
-    if (data.harmony_score == null) return
+    if (data.frame_width && data.frame_height) {
+      setWebcamFrameSize({ w: data.frame_width, h: data.frame_height })
+    }
+    if (data.crop_method === 'none' || data.harmony_score == null) {
+      setWebcamOverlayBoxes([])
+      setWebcamLiveScore(null)
+      setWebcamLiveItems(null)
+      setWebcamCropMethod(data.crop_method ?? 'none')
+      if (data.reasons?.length) {
+        setHarmonyScore(prev => ({
+          score_total: prev?.score_total ?? 0,
+          score_color: prev?.score_color ?? 0,
+          score_texture: prev?.score_texture ?? 0,
+          score_pattern: prev?.score_pattern ?? 0,
+          score_style: prev?.score_style ?? 0,
+          reasons: data.reasons ?? [],
+          debug: { source: 'webcam-harmony', crop_method: data.crop_method },
+        }))
+      }
+      return
+    }
+    if (data.overlay_boxes?.length) {
+      setWebcamOverlayBoxes(data.overlay_boxes)
+    } else if (data.crop_items?.length) {
+      setWebcamOverlayBoxes(
+        data.crop_items
+          .filter((item): item is WebcamCropItem & { bbox: WebcamBbox } => Boolean(item.bbox))
+          .map(item => ({
+            category: item.category,
+            bbox: item.bbox,
+            role: item.category === '전체' ? 'full' : 'crop',
+          })),
+      )
+    }
     const total = data.harmony_score
     const color = data.color_score ?? total
     setWebcamLiveScore(Math.round(total))
+    setWebcamCropMethod(data.crop_method ?? null)
+    setWebcamLiveItems(data.live_items?.length ? data.live_items : null)
     setHarmonyScore(prev => ({
       score_total: total,
       score_color: color,
@@ -654,6 +929,7 @@ function Home() {
       return
     }
     webcamAnalyzingRef.current = true
+    const requestSeq = ++webcamRequestSeqRef.current
     setIsWebcamLiveLoading(true)
     try {
       const blob = await captureWebcamFrameBlob()
@@ -663,12 +939,14 @@ function Home() {
       }
 
       const data = await callWebcamHarmony(blob)
+      if (requestSeq !== webcamRequestSeqRef.current) return
       if (!data?.success) {
         setWebcamError(data?.error || '실시간 분석에 실패했습니다.')
         return
       }
       setWebcamError('')
       applyWebcamHarmonyToScore(data)
+      requestAnimationFrame(() => measureWebcamPreview())
     } catch (error) {
       console.error('웹캠 실시간 분석 오류:', error)
       setWebcamError('서버에 연결할 수 없습니다. 백엔드(8000)가 실행 중인지 확인해주세요.')
@@ -683,6 +961,9 @@ function Home() {
       setWebcamError('')
       setWebcamVideoReady(false)
       setWebcamLiveScore(null)
+      setWebcamOverlayBoxes([])
+      setWebcamCropMethod(null)
+      setWebcamLiveItems(null)
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user' },
         audio: false
@@ -797,6 +1078,7 @@ function Home() {
       }
 
       applyWebcamHarmonyToScore(data)
+      requestAnimationFrame(() => measureWebcamPreview())
 
       const crops = (data.crop_items ?? []).filter(
         (c): c is WebcamCropItem & { imageBase64: string } =>
@@ -873,6 +1155,7 @@ function Home() {
       clearWebcamInterval()
       if (!isCameraOn) {
         setWebcamLiveScore(null)
+        setWebcamLiveItems(null)
         setWebcamVideoReady(false)
       }
       return
@@ -951,16 +1234,60 @@ function Home() {
                   />
                 ) : (
                   <div className="h-full min-h-0 p-6 flex flex-col gap-3">
-                    <div className="flex-1 min-h-0 border border-secondary rounded-2xl overflow-hidden bg-[#FAFAF8] relative">
+                    <div
+                      ref={webcamPreviewRef}
+                      className="flex-1 min-h-0 border border-secondary rounded-2xl overflow-hidden bg-[#FAFAF8] relative"
+                    >
                       {isCameraOn ? (
-                        <video
-                          ref={webcamVideoRef}
-                          autoPlay
-                          playsInline
-                          muted
-                          onLoadedData={onWebcamVideoReady}
-                          className="absolute inset-0 w-full h-full object-cover -scale-x-100"
-                        />
+                        <>
+                          <video
+                            ref={webcamVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            onLoadedData={() => {
+                              onWebcamVideoReady()
+                              measureWebcamPreview()
+                            }}
+                            className="absolute inset-0 w-full h-full object-cover -scale-x-100"
+                          />
+                          {webcamOverlayBoxes.length > 0 &&
+                          webcamFrameSize.w > 0 &&
+                          webcamPreviewSize.w > 0 ? (
+                            <div className="absolute inset-0 pointer-events-none z-10">
+                              {webcamOverlayBoxes.map((box, i) => {
+                                const rect = mapWebcamBboxToOverlay(
+                                  box.bbox,
+                                  webcamFrameSize.w,
+                                  webcamFrameSize.h,
+                                  webcamPreviewSize.w,
+                                  webcamPreviewSize.h,
+                                  true,
+                                )
+                                if (!rect) return null
+                                const style = WEBCAM_BOX_STYLES[box.category] ?? {
+                                  border: 'border-secondary',
+                                  bg: 'bg-cream/25',
+                                  label: box.category,
+                                  chip: 'bg-secondary/90 text-cream',
+                                }
+                                return (
+                                  <div
+                                    key={`${box.category}-${box.role}-${i}`}
+                                    className={`absolute box-border border-[2.5px] border-dashed ${style.border} ${style.bg}`}
+                                    style={rect}
+                                  >
+                                    <span
+                                      className={`absolute -top-6 left-0 text-[11px] font-semibold px-2 py-0.5 rounded whitespace-nowrap shadow-sm ${style.chip}`}
+                                    >
+                                      {style.label}
+                                    </span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          ) : null}
+                        </>
                       ) : (
                         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-4">
                           <div className="w-16 h-16 rounded-full border border-secondary flex items-center justify-center">
@@ -975,6 +1302,11 @@ function Home() {
                         </div>
                       )}
                     </div>
+                    {isCameraOn && webcamOverlayBoxes.length > 0 ? (
+                      <p className="shrink-0 text-[10px] text-center text-secondary/80 leading-relaxed">
+                        박스는 점수 계산에 쓰인 옷 영역입니다 (상의·하의·신발)
+                      </p>
+                    ) : null}
                     <div
                       id="webcam-live-status"
                       className="shrink-0 py-2 text-center text-sm leading-relaxed text-secondary"
@@ -990,6 +1322,11 @@ function Home() {
                             실시간 조화도:{' '}
                             {webcamLiveScore != null ? `${webcamLiveScore}점` : '—'}
                           </p>
+                          {webcamCropMethod && webcamCropMethod !== 'none' ? (
+                            <p className="mt-0.5 text-[10px] text-secondary/70">
+                              인식: {webcamCropMethod === 'mediapipe' ? '관절(MediaPipe)' : '비율(YOLO)'}
+                            </p>
+                          ) : null}
                         </>
                       )}
                       {webcamError ? (
@@ -1018,13 +1355,20 @@ function Home() {
 
             {/* 분석 결과 */}
             <div className="bg-[#FAFAF8] p-4 border-t border-secondary h-[260px] overflow-y-auto scrollbar-thin shrink-0">
-              <h4 className="text-xs font-regular text-secondary mb-4 uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">분석 결과</h4>
-              <div className={`grid gap-3 ${accessoryOnlyOutfit ? 'grid-cols-1' : 'grid-cols-2'}`}>
+              <div className="flex items-center gap-2 mb-4 flex-wrap">
+                <h4 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">
+                  분석 결과
+                </h4>
+                {useWebcamLiveAnalysis ? (
+                  <span className="text-[10px] text-secondary/70">실시간 인식</span>
+                ) : null}
+              </div>
+              <div className={`grid gap-3 ${displayAccessoryOnlyOutfit ? 'grid-cols-1' : 'grid-cols-2'}`}>
                 <div className="bg-[#FAFAF8] p-3 flex flex-col">
                   <div className="text-xs text-secondary mb-2 uppercase tracking-wider">색상</div>
                   <div className="flex space-x-1 flex-wrap gap-1 min-h-[16px] items-center">
-                    {beforeTopColors.length > 0 ? (
-                      beforeTopColors.map((color, idx) => (
+                    {displayTopColors.length > 0 ? (
+                      displayTopColors.map((color, idx) => (
                         <div
                           key={idx}
                           className="w-4 h-4 rounded-full border border-secondary"
@@ -1037,17 +1381,17 @@ function Home() {
                     )}
                   </div>
                 </div>
-                {!accessoryOnlyOutfit && (
+                {!displayAccessoryOnlyOutfit && (
                   <>
                 <div className="bg-[#FAFAF8] p-3 flex flex-col">
                   <div className="text-xs text-secondary mb-2 uppercase tracking-wider">재질</div>
                   <div className="flex flex-wrap gap-1 min-h-[28px] items-center">
-                    {beforeFashionAttributes.allTextures && beforeFashionAttributes.allTextures.length > 0 ? (
-                      beforeFashionAttributes.allTextures.map((texture, idx) => (
+                    {displayFashionAttributes.allTextures && displayFashionAttributes.allTextures.length > 0 ? (
+                      displayFashionAttributes.allTextures.map((texture, idx) => (
                         <span
                           key={idx}
                           className={`text-xs px-3 py-1 border border-secondary rounded-full ${
-                            texture === beforeFashionAttributes.texture
+                            texture === displayFashionAttributes.texture
                               ? 'bg-secondary text-cream'
                               : 'bg-[#FAFAF8] text-secondary'
                           }`}
@@ -1063,12 +1407,12 @@ function Home() {
                 <div className="bg-[#FAFAF8] p-3 flex flex-col">
                   <div className="text-xs text-secondary mb-2 uppercase tracking-wider">패턴</div>
                   <div className="flex flex-wrap gap-1 min-h-[28px] items-center">
-                    {beforeFashionAttributes.allPatterns && beforeFashionAttributes.allPatterns.length > 0 ? (
-                      beforeFashionAttributes.allPatterns.map((pattern, idx) => (
+                    {displayFashionAttributes.allPatterns && displayFashionAttributes.allPatterns.length > 0 ? (
+                      displayFashionAttributes.allPatterns.map((pattern, idx) => (
                         <span
                           key={idx}
                           className={`text-xs px-3 py-1 border border-secondary rounded-full ${
-                            pattern === beforeFashionAttributes.pattern
+                            pattern === displayFashionAttributes.pattern
                               ? 'bg-secondary text-cream'
                               : 'bg-[#FAFAF8] text-secondary'
                           }`}
@@ -1084,12 +1428,12 @@ function Home() {
                 <div className="bg-[#FAFAF8] p-3 flex flex-col">
                   <div className="text-xs text-secondary mb-2 uppercase tracking-wider">스타일</div>
                   <div className="flex flex-wrap gap-1 min-h-[28px] items-center">
-                    {beforeFashionAttributes.allStyles && beforeFashionAttributes.allStyles.length > 0 ? (
-                      beforeFashionAttributes.allStyles.map((style, idx) => (
+                    {displayFashionAttributes.allStyles && displayFashionAttributes.allStyles.length > 0 ? (
+                      displayFashionAttributes.allStyles.map((style, idx) => (
                         <span
                           key={idx}
                           className={`text-xs px-3 py-1 border border-secondary rounded-full ${
-                            style === beforeFashionAttributes.style
+                            style === displayFashionAttributes.style
                               ? 'bg-secondary text-cream'
                               : 'bg-[#FAFAF8] text-secondary'
                           }`}
@@ -1229,7 +1573,11 @@ function Home() {
                         </div>
                       ) : (
                         <div className="text-4xl font-light text-cream">
-                          {harmonyScore ? Math.round(harmonyScore.score_total) : '-'}
+                          {inputMode === 'webcam' && webcamLiveScore != null
+                            ? webcamLiveScore
+                            : harmonyScore
+                              ? Math.round(harmonyScore.score_total)
+                              : '-'}
                         </div>
                       )}
                     </div>

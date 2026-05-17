@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from rembg import remove
 from PIL import Image, ImageDraw
 from ultralytics import YOLO
@@ -46,10 +46,35 @@ except ImportError:
     CLIPModel = None
     CLIPProcessor = None
 
+try:
+    import mediapipe as mp
+    HAS_MEDIAPIPE = True
+except ImportError:
+    HAS_MEDIAPIPE = False
+    mp = None
+
 FASHION_CLIP_MODEL_ID = "hf-hub:Marqo/marqo-fashionCLIP"
 CATEGORY_CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
 
 app = FastAPI(title="HUWARI API")
+
+
+@app.on_event("startup")
+def _warmup_heavy_models():
+    """첫 웹캠 요청 전에 YOLO·Pose·조화 모델을 미리 로드해 대기 시간을 줄입니다."""
+    import threading
+
+    def _load():
+        try:
+            get_yolo_model()
+            get_pose_model()
+            get_harmony_model()
+            print("웹캠용 모델 워밍업 완료 (YOLO, Pose, Harmony)")
+        except Exception as exc:
+            print(f"모델 워밍업 일부 실패 (첫 요청 시 재시도): {exc}")
+
+    threading.Thread(target=_load, daemon=True).start()
+
 
 # ===== 경로 설정 =====
 HARMONY_CKPT = Path(__file__).resolve().parent / "models" / "fashion_harmony_retrained.pt"
@@ -57,6 +82,8 @@ HARMONY_CKPT = Path(__file__).resolve().parent / "models" / "fashion_harmony_ret
 # ===== 전역 변수 =====
 _harmony_model  = None
 _yolo_model     = None
+_pose_model     = None
+_pose_backend   = None  # "solutions" | "tasks"
 _clip_model       = None
 _clip_preprocess  = None
 _clip_tokenizer   = None
@@ -102,6 +129,300 @@ def get_yolo_model():
         _yolo_model = YOLO('yolov8n.pt')
         print("YOLOv8 로드 완료")
     return _yolo_model
+
+
+def _ensure_pose_landmarker_model() -> Path:
+    """MediaPipe Tasks API용 pose_landmarker_lite.task"""
+    model_path = Path(__file__).resolve().parent / "models" / "pose_landmarker_lite.task"
+    if model_path.exists():
+        return model_path
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    url = (
+        "https://storage.googleapis.com/mediapipe-models/"
+        "pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
+    )
+    import urllib.request
+    print(f"MediaPipe pose 모델 다운로드: {model_path}")
+    urllib.request.urlretrieve(url, model_path)
+    return model_path
+
+
+def get_pose_model():
+    """MediaPipe Pose 지연 로딩 (solutions 우선, 없으면 Tasks API)"""
+    global _pose_model, _pose_backend
+    if not HAS_MEDIAPIPE:
+        return None
+    if _pose_model is not None:
+        return _pose_model
+
+    if hasattr(mp, "solutions"):
+        _pose_model = mp.solutions.pose.Pose(
+            static_image_mode=True,
+            min_detection_confidence=0.5,
+        )
+        _pose_backend = "solutions"
+        print("MediaPipe Pose (solutions) 로드 완료")
+        return _pose_model
+
+    try:
+        from mediapipe.tasks.python import BaseOptions
+        from mediapipe.tasks.python import vision
+
+        options = vision.PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(_ensure_pose_landmarker_model())),
+            running_mode=vision.RunningMode.IMAGE,
+            min_pose_detection_confidence=0.5,
+        )
+        _pose_model = vision.PoseLandmarker.create_from_options(options)
+        _pose_backend = "tasks"
+        print("MediaPipe PoseLandmarker (tasks) 로드 완료")
+    except Exception as exc:
+        print(f"MediaPipe Pose 로드 실패: {exc}")
+        _pose_model = None
+        _pose_backend = None
+    return _pose_model
+
+
+def _clamp_crop_box(x1: float, y1: float, x2: float, y2: float, w: int, h: int) -> Optional[Tuple[int, int, int, int]]:
+    x1i, y1i, x2i, y2i = int(x1), int(y1), int(x2), int(y2)
+    x1i = max(0, min(x1i, w - 1))
+    y1i = max(0, min(y1i, h - 1))
+    x2i = max(x1i + 1, min(x2i, w))
+    y2i = max(y1i + 1, min(y2i, h))
+    if x2i - x1i < 8 or y2i - y1i < 8:
+        return None
+    return x1i, y1i, x2i, y2i
+
+
+def _landmark_visible(landmark, threshold: float = 0.5) -> bool:
+    visibility = getattr(landmark, "visibility", None)
+    if visibility is None:
+        return True
+    return float(visibility) >= threshold
+
+
+def _bbox_from_landmarks(
+    landmarks,
+    indices: List[int],
+    img_w: int,
+    img_h: int,
+    pad_ratio: float = 0.08,
+    min_visible: int = 2,
+) -> Optional[Tuple[int, int, int, int]]:
+    pts = [
+        (landmarks[i].x * img_w, landmarks[i].y * img_h)
+        for i in indices
+        if _landmark_visible(landmarks[i])
+    ]
+    if len(pts) < min_visible:
+        return None
+    xs, ys = zip(*pts)
+    pad_w, pad_h = img_w * pad_ratio, img_h * pad_ratio
+    return _clamp_crop_box(min(xs) - pad_w, min(ys) - pad_h, max(xs) + pad_w, max(ys) + pad_h, img_w, img_h)
+
+
+def _bbox_dict(x1: int, y1: int, x2: int, y2: int) -> Dict[str, int]:
+    return {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+
+
+def _encode_crop_item(
+    category: str,
+    crop_img: Image.Image,
+    crop_method: str,
+    bbox: Tuple[int, int, int, int],
+) -> Dict:
+    buf = io.BytesIO()
+    crop_img.save(buf, format="PNG")
+    buf.seek(0)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    return {
+        "category": category,
+        "imageBase64": f"data:image/png;base64,{b64}",
+        "crop_method": crop_method,
+        "bbox": _bbox_dict(*bbox),
+    }
+
+
+def _mediapipe_pose_crops(
+    image: Image.Image,
+) -> Optional[List[Tuple[str, Image.Image, Tuple[int, int, int, int]]]]:
+    """MediaPipe 관절 기반 의류 크롭(상·하의·신발). 있는 영역만 반환, 상의 단독 허용."""
+    pose = get_pose_model()
+    if pose is None:
+        return None
+
+    img_w, img_h = image.size
+    try:
+        if _pose_backend == "solutions":
+            results = pose.process(np.array(image))
+            if not results.pose_landmarks:
+                return None
+            lms = results.pose_landmarks.landmark
+        else:
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.asarray(image))
+            results = pose.detect(mp_image)
+            if not results.pose_landmarks:
+                return None
+            lms = results.pose_landmarks[0]
+    except Exception as exc:
+        print(f"MediaPipe 추론 실패, YOLO 폴백: {exc}")
+        return None
+
+    region_boxes: Dict[str, Optional[Tuple[int, int, int, int]]] = {
+        "상의": _bbox_from_landmarks(lms, [11, 12, 23, 24], img_w, img_h, pad_ratio=0.08),
+        "하의": _bbox_from_landmarks(lms, [23, 24, 25, 26], img_w, img_h, pad_ratio=0.08, min_visible=2),
+        "신발": _bbox_from_landmarks(lms, [27, 28], img_w, img_h, pad_ratio=0.12, min_visible=1),
+    }
+    if region_boxes["상의"] is None:
+        region_boxes["상의"] = _bbox_from_landmarks(
+            lms, [11, 12], img_w, img_h, pad_ratio=0.14, min_visible=2,
+        )
+
+    crops: List[Tuple[str, Image.Image, Tuple[int, int, int, int]]] = []
+    for category, box in region_boxes.items():
+        if box is None:
+            continue
+        crops.append((category, image.crop(box), box))
+
+    if not any(cat in ("상의", "하의") for cat, _, _ in crops):
+        return None
+    return crops
+
+
+def _person_bbox_from_landmarks(
+    landmarks, img_w: int, img_h: int,
+) -> Optional[Tuple[int, int, int, int]]:
+    """관절 전체로 사람 영역 bbox (오버레이용)."""
+    pts = [
+        (landmarks[i].x * img_w, landmarks[i].y * img_h)
+        for i in range(len(landmarks))
+        if _landmark_visible(landmarks[i], threshold=0.3)
+    ]
+    if len(pts) < 4:
+        return None
+    xs, ys = zip(*pts)
+    pad_w, pad_h = img_w * 0.04, img_h * 0.04
+    return _clamp_crop_box(min(xs) - pad_w, min(ys) - pad_h, max(xs) + pad_w, max(ys) + pad_h, img_w, img_h)
+
+
+
+def _is_plausible_region_box(
+    x1: int, y1: int, x2: int, y2: int, frame_w: int, frame_h: int,
+    min_width_ratio: float = 0.08,
+) -> bool:
+    """상·하의 등 영역 bbox가 세로 띠처럼 좁지 않은지 검증."""
+    bw, bh = x2 - x1, y2 - y1
+    if bw <= 0 or bh <= 0:
+        return False
+    if bw / frame_w < min_width_ratio:
+        return False
+    if bh / frame_h < 0.06:
+        return False
+    aspect = bh / bw
+    if aspect > 6.5:
+        return False
+    return True
+
+
+def _expand_person_box_width(
+    x1: float, y1: float, x2: float, y2: float,
+    frame_w: int, min_width_ratio: float = 0.18,
+) -> Tuple[float, float, float, float]:
+    """YOLO 사람 박스가 너무 좁으면 중심 기준으로 너비를 보정."""
+    bw = x2 - x1
+    min_bw = frame_w * min_width_ratio
+    if bw >= min_bw:
+        return x1, y1, x2, y2
+    cx = (x1 + x2) / 2
+    half = min_bw / 2
+    nx1 = max(0.0, cx - half)
+    nx2 = min(float(frame_w), cx + half)
+    if nx2 - nx1 < min_bw:
+        if nx1 == 0:
+            nx2 = min(float(frame_w), min_bw)
+        else:
+            nx1 = max(0.0, float(frame_w) - min_bw)
+    return nx1, y1, nx2, y2
+
+
+def _is_plausible_person_box(
+    x1: float, y1: float, x2: float, y2: float,
+    frame_w: int, frame_h: int, conf: float,
+    min_conf: float = 0.45,
+) -> bool:
+    """세로 막대·배경 오검출을 걸러내기 위한 사람 bbox 검증."""
+    if conf < min_conf:
+        return False
+    bw, bh = x2 - x1, y2 - y1
+    if bw <= 0 or bh <= 0:
+        return False
+    area_ratio = (bw * bh) / (frame_w * frame_h)
+    if area_ratio < 0.02 or area_ratio > 0.95:
+        return False
+    aspect = bh / bw
+    if aspect < 0.9 or aspect > 6.0:
+        return False
+    if bw / frame_w < 0.07:
+        return False
+    return True
+
+
+def _yolo_person_box(
+    image_np: np.ndarray, frame_w: int, frame_h: int, conf_threshold: float = 0.45,
+) -> Optional[Tuple[float, float, float, float, float]]:
+    """신뢰도·형태 검증을 통과한 첫 번째 사람 bbox."""
+    yolo = get_yolo_model()
+    results = yolo(image_np, classes=[0])
+    candidates: List[Tuple[float, float, float, float, float]] = []
+    for result in results:
+        for box in result.boxes:
+            conf = float(box.conf[0].cpu().numpy())
+            if conf < conf_threshold:
+                continue
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
+            if _is_plausible_person_box(x1, y1, x2, y2, frame_w, frame_h, conf, conf_threshold):
+                candidates.append((x1, y1, x2, y2, conf))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (c[2] - c[0]) * (c[3] - c[1]), reverse=True)
+    return candidates[0]
+
+
+def _is_torso_only_box(y1: float, y2: float, frame_h: int) -> bool:
+    """상반신·상의만 보이는 구도(하체·발이 프레임 밖)."""
+    ph = y2 - y1
+    if ph <= 0:
+        return False
+    return y2 < frame_h * 0.72 or ph / frame_h < 0.42
+
+
+def _yolo_ratio_crop_specs(
+    x1: float, y1: float, x2: float, y2: float, frame_h: int,
+) -> List[Tuple[str, Tuple[int, int, int, int]]]:
+    ph = y2 - y1
+    ix1, ix2 = int(x1), int(x2)
+    if _is_torso_only_box(y1, y2, frame_h):
+        return [("상의", (ix1, int(y1 + ph * 0.02), ix2, int(y2)))]
+    return [
+        ("상의", (ix1, int(y1 + ph * 0.08), ix2, int(y1 + ph * 0.48))),
+        ("하의", (ix1, int(y1 + ph * 0.42), ix2, int(y1 + ph * 0.78))),
+        ("신발", (ix1, int(y1 + ph * 0.68), ix2, int(y2))),
+    ]
+
+
+def _yolo_ratio_crops(
+    image: Image.Image, x1: float, y1: float, x2: float, y2: float,
+) -> List[Tuple[str, Image.Image, Tuple[int, int, int, int]]]:
+    frame_h = image.size[1]
+    min_crop_h = max(24, int(frame_h * 0.05))
+    crops: List[Tuple[str, Image.Image, Tuple[int, int, int, int]]] = []
+    for category, box in _yolo_ratio_crop_specs(x1, y1, x2, y2, frame_h):
+        x1b, y1b, x2b, y2b = box
+        if y2b - y1b < min_crop_h:
+            continue
+        crops.append((category, image.crop(box), box))
+    return crops
 
 
 def get_clip_model():
@@ -896,44 +1217,83 @@ async def remove_background(file: UploadFile = File(...)):
         return {"success": False, "error": str(e)}
 
 
+def _extract_colors_from_pil(image: Image.Image, max_colors: int = 5) -> List[Dict]:
+    """PIL 이미지에서 대표 색상 추출 (웹캠 실시간·extract-colors 공용)."""
+    if image.mode == 'RGBA':
+        image_array = np.array(image)
+        mask = image_array[:, :, 3] > 0
+        rgb_pixels = image_array[:, :, :3][mask]
+    else:
+        image = image.convert('RGB')
+        rgb_pixels = np.array(image).reshape(-1, 3)
+
+    if len(rgb_pixels) < 16:
+        return []
+
+    if len(rgb_pixels) > 10000:
+        indices = np.random.choice(len(rgb_pixels), 10000, replace=False)
+        rgb_pixels = rgb_pixels[indices]
+
+    n_clusters = min(max_colors, len(rgb_pixels))
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    kmeans.fit(rgb_pixels)
+    colors = kmeans.cluster_centers_.astype(int)
+    labels = kmeans.labels_
+    cluster_counts = np.bincount(labels)
+    sorted_indices = np.argsort(cluster_counts)[::-1]
+    color_list = []
+    for i in sorted_indices:
+        color = colors[i]
+        r, g, b = int(color[0]), int(color[1]), int(color[2])
+        color_list.append({
+            "rgb": [r, g, b],
+            "hex": f"#{r:02x}{g:02x}{b:02x}",
+            "count": int(cluster_counts[i]),
+            "percentage": float(cluster_counts[i] / len(labels) * 100),
+        })
+    return color_list
+
+
+def _attr_class(attrs: Dict, key: str) -> Optional[str]:
+    block = attrs.get(key)
+    if isinstance(block, dict):
+        return block.get("class")
+    return None
+
+
+def _build_webcam_live_items(
+    crop_items: List[Dict],
+    cropped_imgs: List[Image.Image],
+    item_attrs: List[Dict],
+) -> List[Dict]:
+    """실시간 UI용 — 크롭별 색상·속성(상·하의)."""
+    live: List[Dict] = []
+    main_idx = 0
+    for item, img in zip(crop_items, cropped_imgs):
+        cat = item.get("category")
+        if cat not in ("상의", "하의", "신발"):
+            continue
+        entry: Dict = {
+            "category": cat,
+            "colors": _extract_colors_from_pil(img),
+        }
+        if cat in ("상의", "하의") and main_idx < len(item_attrs):
+            attrs = item_attrs[main_idx]
+            main_idx += 1
+            entry["texture"] = _attr_class(attrs, "texture")
+            entry["pattern"] = _attr_class(attrs, "pattern")
+            entry["style"] = _attr_class(attrs, "style")
+        live.append(entry)
+    return live
+
+
 # ===== 색상 추출 =====
 @app.post("/api/extract-colors")
 async def extract_colors(file: UploadFile = File(...)):
     try:
         image_data = await file.read()
-        image      = Image.open(io.BytesIO(image_data))
-
-        if image.mode == 'RGBA':
-            image_array   = np.array(image)
-            mask          = image_array[:, :, 3] > 0
-            rgb_pixels    = image_array[:, :, :3][mask]
-        else:
-            image      = image.convert('RGB')
-            image_array = np.array(image)
-            rgb_pixels  = image_array.reshape(-1, 3)
-
-        if len(rgb_pixels) > 10000:
-            indices    = np.random.choice(len(rgb_pixels), 10000, replace=False)
-            rgb_pixels = rgb_pixels[indices]
-
-        kmeans         = KMeans(n_clusters=5, random_state=42, n_init=10)
-        kmeans.fit(rgb_pixels)
-        colors         = kmeans.cluster_centers_.astype(int)
-        labels         = kmeans.labels_
-        cluster_counts = np.bincount(labels)
-        sorted_indices = np.argsort(cluster_counts)[::-1]
-        sorted_colors  = colors[sorted_indices]
-        sorted_counts  = cluster_counts[sorted_indices]
-
-        color_list = []
-        for i, color in enumerate(sorted_colors):
-            r, g, b = int(color[0]), int(color[1]), int(color[2])
-            color_list.append({
-                "rgb":        [r, g, b],
-                "hex":        f"#{r:02x}{g:02x}{b:02x}",
-                "count":      int(sorted_counts[i]),
-                "percentage": float(sorted_counts[i] / len(labels) * 100)
-            })
+        image = Image.open(io.BytesIO(image_data))
+        color_list = _extract_colors_from_pil(image)
         return {"success": True, "colors": color_list}
     except Exception as e:
         return {"success": False, "error": str(e), "colors": []}
@@ -1272,68 +1632,67 @@ async def predict_harmony(request: HarmonyRequest):
 @app.post("/api/webcam-harmony")
 async def webcam_harmony(file: UploadFile = File(...)):
     """
-    웹캠 캡처 → YOLOv8 사람 탐지 → 상의/하의/신발 크롭
-    → 각각 아이템으로 반환 + 조화 분석
+    웹캠 캡처 → 의류 영역 크롭(MediaPipe 관절 우선, 실패 시 YOLO 비율)
+    → 상의·하의·신발 중 인식된 항목만 조화 분석 (상의 단독 허용)
     """
     try:
         image_data = await file.read()
-        image      = Image.open(io.BytesIO(image_data)).convert("RGB")
-        image_np   = np.array(image)
+        image = Image.open(io.BytesIO(image_data)).convert("RGB")
+        image_np = np.array(image)
+        frame_w, frame_h = image.size
 
-        yolo    = get_yolo_model()
-        results = yolo(image_np, classes=[0])
+        cropped_imgs: List[Image.Image] = []
+        crop_items: List[Dict] = []
+        detections: List[Dict] = []
+        overall_crop_method = "full_frame"
+        overlay_boxes: List[Dict] = []
 
-        cropped_imgs  = []
-        crop_items    = []
-        detections    = []
-
-        for result in results:
-            for box in result.boxes:
-                conf = float(box.conf[0].cpu().numpy())
-                if conf < 0.5:
-                    continue
-
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                ph = y2 - y1
-
-                crops = [
-                    ("상의", image.crop((int(x1), int(y1 + ph * 0.10), int(x2), int(y1 + ph * 0.50)))),
-                    ("하의", image.crop((int(x1), int(y1 + ph * 0.45), int(x2), int(y1 + ph * 0.80)))),
-                    ("신발", image.crop((int(x1), int(y1 + ph * 0.75), int(x2), int(y2)))),
-                ]
-
-                for category, crop_img in crops:
-                    buf = io.BytesIO()
-                    crop_img.save(buf, format='PNG')
-                    buf.seek(0)
-                    b64 = base64.b64encode(buf.getvalue()).decode()
-
+        mp_crops = _mediapipe_pose_crops(image)
+        if mp_crops:
+            overall_crop_method = "mediapipe"
+            for category, crop_img, box in mp_crops:
+                cropped_imgs.append(crop_img)
+                crop_items.append(_encode_crop_item(category, crop_img, "mediapipe", box))
+                overlay_boxes.append({"category": category, "bbox": _bbox_dict(*box), "role": "crop"})
+            detections.append({"person": None, "pose": "mediapipe"})
+        else:
+            person = _yolo_person_box(image_np, frame_w, frame_h)
+            if person:
+                x1, y1, x2, y2, conf = person
+                x1, y1, x2, y2 = _expand_person_box_width(x1, y1, x2, y2, frame_w)
+                overall_crop_method = "ratio"
+                ratio_crops = _yolo_ratio_crops(image, x1, y1, x2, y2)
+                if not ratio_crops:
+                    person_box = _clamp_crop_box(x1, y1, x2, y2, frame_w, frame_h)
+                    if person_box:
+                        ratio_crops = [("상의", image.crop(person_box), person_box)]
+                for category, crop_img, box in ratio_crops:
                     cropped_imgs.append(crop_img)
-                    crop_items.append({
-                        "category": category,
-                        "imageBase64": f"data:image/png;base64,{b64}",
-                    })
-
+                    crop_items.append(_encode_crop_item(category, crop_img, "ratio", box))
+                    overlay_boxes.append({"category": category, "bbox": _bbox_dict(*box), "role": "crop"})
                 detections.append({
                     "person": {
-                        "x1": float(x1), "y1": float(y1),
-                        "x2": float(x2), "y2": float(y2),
-                        "confidence": conf
-                    }
+                        "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                        "confidence": conf,
+                    },
+                    "pose": None,
                 })
-                break  # 첫 번째 사람만
 
         if not cropped_imgs:
-            buf = io.BytesIO()
-            image.save(buf, format='PNG')
-            buf.seek(0)
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            cropped_imgs = [image]
-            crop_items   = [{
-                "category": "전체",
-                "imageBase64": f"data:image/png;base64,{b64}",
-            }]
-            detections = [{"person": None}]
+            return {
+                "success": True,
+                "harmony_score": None,
+                "color_score": None,
+                "reasons": [
+                    "옷이 화면에 보이도록 촬영해 주세요. (상의만 있어도 분석 가능)",
+                ],
+                "detections": detections,
+                "crop_items": [],
+                "overlay_boxes": [],
+                "frame_width": frame_w,
+                "frame_height": frame_h,
+                "crop_method": "none",
+            }
 
         main_imgs = [
             img for img, item in zip(cropped_imgs, crop_items)
@@ -1343,7 +1702,7 @@ async def webcam_harmony(file: UploadFile = File(...)):
             img for img, item in zip(cropped_imgs, crop_items)
             if item["category"] in ["신발"]
         ]
-        if not main_imgs and crop_items[0]["category"] == "전체":
+        if not main_imgs and crop_items and crop_items[0]["category"] == "전체":
             main_imgs = [cropped_imgs[0]]
 
         result = analyze_outfit(
@@ -1351,15 +1710,25 @@ async def webcam_harmony(file: UploadFile = File(...)):
             accessory_images=accessory_imgs,
             category_list=[item["category"] for item in crop_items],
         )
+        live_items = _build_webcam_live_items(
+            crop_items,
+            cropped_imgs,
+            result.get("item_attrs") or [],
+        )
 
         return {
-            "success":             True,
-            "harmony_score":       result["harmony_score"],
+            "success": True,
+            "harmony_score": result["harmony_score"],
             "harmony_sigmoid_raw": result.get("harmony_sigmoid_raw"),
-            "color_score":         result.get("color_score"),
-            "reasons":             result["reasons"],
-            "detections":          detections,
-            "crop_items":          crop_items,
+            "color_score": result.get("color_score"),
+            "reasons": result["reasons"],
+            "live_items": live_items,
+            "detections": detections,
+            "crop_items": crop_items,
+            "overlay_boxes": overlay_boxes,
+            "frame_width": frame_w,
+            "frame_height": frame_h,
+            "crop_method": overall_crop_method,
         }
 
     except Exception as e:

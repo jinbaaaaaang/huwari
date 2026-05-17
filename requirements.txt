@@ -5,6 +5,7 @@ rembg
 pillow>=7.1.2
 numpy>=2.3.0,<2.4.0
 ultralytics>=8.3.0
+mediapipe>=0.10.0
 torch>=2.0.0
 torchvision>=0.15.0
 scipy>=1.11.0

@@ -154,12 +154,6 @@ const Header = () => {
           />
         </div>
         <Link to="/" className="flex items-center gap-2">
-          <img
-            src="/assets/normal_gini.svg"
-            alt=""
-            className="w-6 h-6"
-            aria-hidden
-          />
           <h1 className="text-lg font-regular text-secondary uppercase tracking-wider">HUWARI</h1>
         </Link>
         <div ref={rightWrapRef} className="relative flex items-center">
