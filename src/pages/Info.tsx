@@ -52,7 +52,7 @@ const FEATURES = [
   },
   {
     title: '웹캠 실시간·캡처',
-    desc: '카메라를 켜면 5초마다 조화 점수와 XAI 피드백이 갱신됩니다. 「캡처」하면 상·하의·신발이 크롭되어 배경 제거 후 캔버스에 추가됩니다.',
+    desc: '카메라를 켜면 10초마다 조화 점수·피드백·옷 영역 박스가 갱신됩니다. 상의만 보여도 분석 가능하며, 「캡처」 시 크롭본을 캔버스에 추가합니다.',
     icon: (
       <path
         strokeLinecap="round"
@@ -80,7 +80,7 @@ const STEPS = [
   {
     n: '1',
     title: '아이템 추가',
-    desc: '「코디 업로드」에서 이미지를 고르거나 「웹캠」을 켜세요. 웹캠은 실시간 조화·피드백이 5초마다 갱신되고, 「캡처」 시 배경 제거 후 가이드에 배치됩니다.',
+    desc: '「코디 업로드」에서 이미지를 고르거나 「웹캠」을 켜세요. 웹캠은 10초마다 실시간 조화·피드백·분석 결과(색·속성)가 갱신되고, 「캡처」 시 배경 제거 후 가이드에 배치됩니다.',
   },
   {
     n: '2',
@@ -264,10 +264,20 @@ const Info = () => {
               <div className="border-r border-secondary p-6">
                 <h4 className="text-sm font-regular text-secondary mb-3 uppercase tracking-wider">실시간 분석</h4>
                 <ul className="text-xs text-secondary space-y-2 leading-relaxed list-disc list-inside">
-                  <li>카메라 ON 후 즉시 1회, 이후 <span className="font-medium text-secondary">5초마다</span> 프레임을 분석합니다.</li>
-                  <li>YOLOv8로 사람을 찾아 상·하의·신발 영역을 크롭한 뒤 조화 점수·피드백을 계산합니다.</li>
+                  <li>카메라 ON 후 즉시 1회, 이후 <span className="font-medium text-secondary">10초마다</span> 프레임을 분석합니다.</li>
+                  <li>
+                    <span className="font-medium text-secondary">MediaPipe Pose</span>로 옷 영역(상·하의·신발)을 우선 인식하고, 실패 시{' '}
+                    <span className="font-medium text-secondary">YOLOv8</span> 비율 크롭으로 폴백합니다.{' '}
+                    <span className="font-medium text-secondary">상의만</span> 보여도 분석할 수 있습니다.
+                  </li>
+                  <li>
+                    프리뷰 위에 인식된 <span className="font-medium text-secondary">옷 영역 점선 박스</span>(상·하의·신발 라벨)가 표시됩니다.
+                  </li>
+                  <li>
+                    왼쪽 <span className="font-medium text-secondary">「분석 결과」</span>에 실시간 색상·재질·패턴·스타일이 채워집니다(「실시간 인식」 표시).
+                  </li>
                   <li>오른쪽 「코디 평가」에 점수·기니 표정·말풍선 피드백이 표시됩니다. 캔버스에는 아이템을 넣지 않습니다.</li>
-                  <li>이전 분석이 끝나지 않았으면 그번 주기는 건너뜁니다.</li>
+                  <li>첫 분석은 모델 로딩으로 20~40초 걸릴 수 있습니다. 이전 분석이 끝나지 않았으면 그번 주기는 건너뜁니다.</li>
                 </ul>
               </div>
               <div className="p-6">
@@ -402,7 +412,7 @@ const Info = () => {
               FashionCLIP 색 점수(25%)를 합친 뒤, 룰북 규칙과 50:50 병합할 수 있는 0~100 점수입니다. 코디 업로드·캔버스
               기준은 아이템 추가·삭제·속성·색 변경 시 약 0.4초 후 점수와 말풍선 피드백이 다시 생성됩니다. 위치만
               드래그한 경우에는 재계산하지 않습니다. 웹캠 실시간은 캔버스 없이{' '}
-              <span className="font-medium text-secondary">5초마다 webcam-harmony</span> 결과로 점수·피드백이 갱신됩니다.
+              <span className="font-medium text-secondary">10초마다 webcam-harmony</span> 결과로 점수·피드백·왼쪽 분석 결과(색·속성)가 갱신됩니다.
             </p>
             <div className="border border-secondary rounded-xl p-5">
               <h4 className="text-xs font-medium text-secondary uppercase tracking-wider mb-2">피드백 톤</h4>
@@ -444,7 +454,8 @@ const Info = () => {
                 { name: 'OpenAI CLIP', sub: '의류 종류 분류' },
                 { name: '룰북', sub: '조합 규칙·설명' },
                 { name: 'PyTorch', sub: '딥러닝 추론' },
-                { name: 'YOLOv8', sub: '웹캠 사람·크롭' },
+                { name: 'MediaPipe', sub: '웹캠 옷 영역(관절)' },
+                { name: 'YOLOv8', sub: '웹캠 폴백 크롭' },
                 { name: 'Tailwind CSS', sub: '스타일링' },
               ].map((t, i) => (
                 <div

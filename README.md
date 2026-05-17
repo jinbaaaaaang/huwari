@@ -347,7 +347,7 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 |------|--------|---------|
 | 조화 | MH-Attn 중심 (Pairwise Acc ~0.756) | FashionHarmony + Set Transformer (실험 AUC ~0.871 등) |
 | 속성 | 다세분류·노이즈 | K-Fashion·축소 클래스 방향 + 통합 모델 헤드 |
-| 웹캠 | 없음 | YOLO 크롭 + `webcam-harmony` 실시간(5초)·캡처 + `predict-harmony`(캔버스) |
+| 웹캠 | 없음 | MediaPipe·YOLO 의류 크롭 + `webcam-harmony` 실시간(10초)·캡처 + `predict-harmony`(캔버스) |
 | 서비스 | API 단편 | FastAPI + React |
 
 | # | 한계 |
@@ -373,14 +373,14 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 1. 여러 아이템을 한 코디로 보고 **조화 점수(0~100)** 를 낸다(FashionHarmony 세트 raw와 FashionCLIP 색 점수를 **75% / 25%**로 합성).
 2. 화면·히스토리용 **재질·패턴·스타일·카테고리**는 **`FashionHarmonyModel.get_attributes`** 로 채운다(한국어 클래스명).
 3. **의류 타입(슬롯 배치·요청 `category` 없을 때)** 은 **OpenAI CLIP**(`openai/clip-vit-base-patch32`)으로 분류한다. 조화 API의 **`reasons`** 에는 **FashionCLIP**으로 코디 이미지와 문장 후보를 비교한 피드백을 **선택적으로** 덧붙인다(`generate_clip_feedback`).
-4. **웹캠**으로 전신 프레임에서 실시간 조화·피드백과 캡처 후 캔버스 반영을 지원한다. 상세는 [웹캠](#webcam) 절.
+4. **웹캠**으로 카메라 프레임에서 실시간 조화·피드백·옷 영역 표시와 캡처 후 캔버스 반영을 지원한다(상의만 있어도 분석 가능). 상세는 [웹캠](#webcam) 절.
 
 스택은 **React·Vite + FastAPI**이며, **히스토리** 저장을 지원한다.
 
 <a id="model-flow-current"></a>
 #### 5.1.1 과정과 산출물
 
-사용자가 올린 **한 장**과, 캔버스에 쌓인 **여러 장(한 코디)** 을 나누어 본다. 아래는 **「무슨 일을 하면 → 화면·응답에 무엇이 생기는지」** 만 정리한 것이다. (웹캠 전용 백엔드는 먼저 **사람 찾기·크롭**이 붙고, 그 다음은 아래 **여러 장**과 같은 종류의 결과를 만든다.)
+사용자가 올린 **한 장**과, 캔버스에 쌓인 **여러 장(한 코디)** 을 나누어 본다. 아래는 **「무슨 일을 하면 → 화면·응답에 무엇이 생기는지」** 만 정리한 것이다. (웹캠 전용 백엔드는 먼저 **의류 영역 크롭**(MediaPipe Pose 우선, YOLO 폴백)이 붙고, 그 다음은 아래 **여러 장**과 같은 종류의 결과를 만든다.)
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F6D1DD','primaryTextColor':'#3E2723','primaryBorderColor':'#C9A8A0','lineColor':'#A1887F','secondaryColor':'#F9E8ED','tertiaryColor':'#FDF5F8','background':'#FDF5F8','mainBkg':'#F6D1DD','clusterBkg':'#F9E8ED','clusterBorder':'#C9A8A0','edgeLabelBackground':'#FDF5F8','fontFamily':'inherit'}}}%%
@@ -488,14 +488,14 @@ UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 �
 | 의류 타입만 | `POST /api/classify-clothing-type` | 1장 |
 | 배경 제거·색·히스토리 | `remove-background`, `extract-colors`, `save-history`, `get-history`, `delete-history/{id}` | 히스토리는 메모리 |
 
-**요약**: **`FashionHarmonyModel`** 이 메인 의류 세트의 조화 raw와 **아이템 속성(한국어)** 을 담당한다. **OpenAI CLIP**(`clip-vit-base-patch32`)은 **의류 타입(슬롯·`predict-harmony`에서 `category` 추론)** 에 쓰이고, **FashionCLIP**(`Marqo/marqo-fashionCLIP`)은 **색 조화 점수**·**`reasons` 피드백 문구**에 쓰인다. **YOLOv8**은 **`webcam-harmony`**·**`detect-clothing`** 등에서 사람 검출·크롭에 쓰인다.
+**요약**: **`FashionHarmonyModel`** 이 메인 의류 세트의 조화 raw와 **아이템 속성(한국어)** 을 담당한다. **OpenAI CLIP**(`clip-vit-base-patch32`)은 **의류 타입(슬롯·`predict-harmony`에서 `category` 추론)** 에 쓰이고, **FashionCLIP**(`Marqo/marqo-fashionCLIP`)은 **색 조화 점수**·**`reasons` 피드백 문구**에 쓰인다. **MediaPipe Pose**·**YOLOv8**은 **`webcam-harmony`**에서 **옷 영역 크롭**에 쓰인다.
 
 ---
 
 <a id="webcam"></a>
 ## 웹캠
 
-Home 상단 **「웹캠」** 탭에서 브라우저 카메라(`getUserMedia`)로 전신 코디를 보고, **실시간 조화·피드백**을 받거나 **캡처**해 캔버스에 옷을 올릴 수 있다. 입력 모드는 `localStorage` 키 `huwari_input_mode`에 저장된다.
+Home 상단 **「웹캠」** 탭에서 브라우저 카메라(`getUserMedia`)로 코디를 보고, **실시간 조화·피드백·옷 영역 박스·분석 결과(색·속성)** 를 받거나 **캡처**해 캔버스에 옷을 올릴 수 있다. **상의만** 화면에 있어도 분석한다. 입력 모드는 `localStorage` 키 `huwari_input_mode`에 저장된다.
 
 ### 웹캠이 하는 일
 
@@ -506,33 +506,34 @@ Home 상단 **「웹캠」** 탭에서 브라우저 카메라(`getUserMedia`)로
 
 ### Home UI: 실시간 vs 캡처
 
-프론트 `Home.tsx`, 주기 상수 **`WEBCAM_LIVE_INTERVAL_MS = 5000`**(5초).
+프론트 `Home.tsx`, 주기 상수 **`WEBCAM_LIVE_INTERVAL_MS = 10000`**(10초).
 
 | 동작 | 호출 | 화면 반영 |
 |------|------|-----------|
-| **실시간 분석** | 카메라 ON 후 **즉시 1회** + **5초마다** `webcam-harmony` | 오른쪽 **조화 점수·기니 표정·피드백 `reasons`** 갱신. **캔버스에는 아이템을 추가하지 않음**. 이전 요청이 끝나지 않으면 해당 tick은 **건너뜀**. |
+| **실시간 분석** | 카메라 ON 후 **즉시 1회** + **10초마다** `webcam-harmony` | **프리뷰**: 상·하의·신발 **점선 박스**(사이트 컬러·연한 배경·라벨). **왼쪽 「분석 결과」**: `live_items` 기반 색상·재질·패턴·스타일(「실시간 인식」). **오른쪽**: 조화 점수·기니 표정·피드백 `reasons`. **캔버스에는 아이템을 추가하지 않음**. 이전 요청이 끝나지 않으면 해당 tick은 **건너뜀**. 첫 요청은 모델 로딩으로 **20~40초** 걸릴 수 있음. |
 | **캡처** | `webcam-harmony` → 응답 `crop_items`(상·하의·신발) | 각 크롭에 **`remove-background`** 후 가이드 슬롯 배치 → **`extract-colors`**, **`classify-fashion-attributes`** 보강 → `beforeItems` 변경 시 **`predict-harmony`**(업로드와 동일). |
 
-**왼쪽 UI**: 둥근 테두리(`rounded-2xl`) 프리뷰, 영상 **`object-cover`**. 카메라 아래 **상태 문구**(실시간 조화도), **카메라 끄기/켜기**·**캡처** 버튼.
+**왼쪽 UI**: 둥근 테두리(`rounded-2xl`) 프리뷰, 영상 **`object-cover`**·좌우 미러(`-scale-x-100`). 카메라 아래 **상태 문구**(실시간 조화도·인식 방식), **카메라 끄기/켜기**·**캡처** 버튼. 서버는 시작 시 YOLO·Pose·Harmony **워밍업** 스레드를 돌린다.
 
 ### `POST /api/webcam-harmony` 처리
 
 백엔드 `main.py` → `webcam_harmony()` → `analyze_outfit()`.
 
-1. multipart **JPEG 1장** 수신.
-2. **YOLOv8**(`classes=[0]`, confidence ≥ 0.5)으로 **첫 번째 사람** bbox.
-3. bbox 높이 비율로 크롭: **상의**(10~50%) · **하의**(45~80%) · **신발**(75~100%). 사람 없으면 **전체 프레임** 1장(`category: 전체`).
+1. multipart **JPEG 1장** 수신(프론트는 최대 너비 **640px**로 축소·미러 후 전송).
+2. **MediaPipe Pose**(solutions 또는 Tasks API `pose_landmarker_lite.task`)로 관절 기반 **상·하의·신발** bbox 크롭. 보이는 영역만 사용하며 **상의 단독**·**상반신**도 허용.
+3. MediaPipe 실패 시 **YOLOv8**(`classes=[0]`)로 사람 bbox → 높이 비율 크롭(상반신이면 **상의만**). 인식된 옷이 없으면 `crop_method: none`과 안내 `reasons`만 반환.
 4. **`analyze_outfit`**: 메인=상·하의, 악세서리=신발 → **FashionHarmony** 세트 raw + **FashionCLIP** 색을 **75% / 25%** 합성 → `harmony_score`(0~100). FashionCLIP 미로드 시 모델 raw만.
-5. **`generate_explanation`** → `reasons` 배열. 피드백 생성 상세는 [XAI (설명 가능 AI)](#xai-explainability) 절.
+5. 크롭별 **색상·속성**을 모아 **`live_items`** 생성. **`generate_explanation`** → `reasons` 배열. 피드백 생성 상세는 [XAI (설명 가능 AI)](#xai-explainability) 절.
 
-**응답 필드(주요)**: `harmony_score`, `color_score`, `reasons`, `crop_items[]`(`category`, `imageBase64`), `detections`.
+**응답 필드(주요)**: `harmony_score`, `color_score`, `reasons`, `live_items[]`(크롭별 색·재질·패턴·스타일), `overlay_boxes[]`(옷 영역 bbox), `crop_items[]`(`category`, `imageBase64`, `bbox`), `crop_method`(`mediapipe` \| `ratio` \| `none`), `frame_width`, `frame_height`, `detections`.
 
 ### 캔버스 조화(`predict-harmony`)와의 차이
 
 | | 웹캠 실시간 | 코디 업로드·캔버스 |
 |--|-------------|-------------------|
 | 입력 | 웹캠 프레임 1장 | `beforeItems` 다장 |
-| 사람·크롭 | YOLO 전신 비율 크롭 | 사용자 배치·슬롯 |
+| 옷·크롭 | MediaPipe 관절 우선, YOLO 비율 폴백 | 사용자 배치·슬롯 |
+| 실시간 분석 패널 | `live_items`로 색·속성 표시 | 캔버스 아이템 기반 |
 | 조화 API | `webcam-harmony` | `predict-harmony` |
 | 룰북 병합 | 없음 (`analyze_outfit` 직결) | 있음(하이브리드) |
 | 캔버스 | 변경 없음 | 아이템 추가·편집 |
@@ -545,10 +546,10 @@ Home 상단 **「웹캠」** 탭에서 브라우저 카메라(`getUserMedia`)로
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F6D1DD','primaryTextColor':'#3E2723','primaryBorderColor':'#C9A8A0','lineColor':'#A1887F','secondaryColor':'#F9E8ED','tertiaryColor':'#FDF5F8','background':'#FDF5F8','mainBkg':'#F6D1DD','clusterBkg':'#F9E8ED','clusterBorder':'#C9A8A0','edgeLabelBackground':'#FDF5F8','fontFamily':'inherit'}}}%%
 flowchart TD
   CAM["getUserMedia 카메라 ON"]
-  subgraph live ["실시간 5초"]
-    FR1["프레임 JPEG"]
+  subgraph live ["실시간 10초"]
+    FR1["프레임 JPEG 640px"]
     WH1["webcam-harmony"]
-    UI1["점수·reasons·실시간 조화도"]
+    UI1["박스·점수·reasons·분석결과 live_items"]
   end
   subgraph cap ["캡처"]
     FR2["프레임 JPEG"]
@@ -567,7 +568,7 @@ flowchart TD
 | 파일 | 역할 |
 |------|------|
 | `src/pages/Home.tsx` | 웹캠 UI, `runLiveWebcamAnalysis`, `captureFromWebcam`, `WEBCAM_LIVE_INTERVAL_MS` |
-| `main.py` | `webcam_harmony`, YOLO 크롭, `analyze_outfit` |
+| `main.py` | `webcam_harmony`, MediaPipe·YOLO 크롭, `live_items`, `analyze_outfit` |
 | `src/pages/Info.tsx` | 사용자용 웹캠 안내 |
 
 ---
@@ -710,8 +711,8 @@ flowchart TB
   - 상의/하의/모자/신발/악세서리를 **OpenAI CLIP**(`clip-vit-base-patch32`)으로 분류한다(`POST /api/classify-clothing-type`).
   - 로드 실패·오류 시 응답은 `clothing_type` 기본값 등으로 폴백할 수 있으며, **ImageNet 계열 보조 분류기는 현재 `main.py`에 연결되어 있지 않다.**
 - **웹캠 실시간·캡처**
-  - 카메라 프레임에서 YOLOv8로 상·하의·신발을 크롭하고 조화·피드백을 계산한다.
-  - **5초마다** 실시간 점수·말풍선 갱신, **캡처** 시 캔버스 반영. 상세는 [웹캠](#webcam) 절.
+  - 카메라 프레임에서 MediaPipe Pose·YOLOv8로 **옷 영역**(상·하의·신발)을 크롭하고 조화·피드백·`live_items`를 계산한다.
+  - **10초마다** 실시간 점수·말풍선·왼쪽 분석 결과·프리뷰 박스 갱신, **캡처** 시 캔버스 반영. 상세는 [웹캠](#webcam) 절.
 - **사람 영역 감지 기반 보조 신호**
   - YOLO를 활용해 인물 포함 여부 및 박스 기반 비율 정보를 추출한다.
   - 분류 결과 보정 또는 후처리 조건 판단에 보조 신호로 사용된다.
