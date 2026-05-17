@@ -195,13 +195,96 @@ flowchart TB
 
 ### 4. 개선 실험: FashionHarmony와 데이터 재정렬
 
-원칙을 코드와 실험으로 옮긴 순서를 **단계**로 나누면 다음과 같다.
+원칙을 코드와 실험으로 옮긴 순서를 **단계**로 나누면 다음과 같다. 학습용 데이터 파이프라인은 [데이터 전처리](#data-preprocessing) 절을 본다.
+
+<a id="data-preprocessing"></a>
+#### 데이터 전처리
+
+학습 파이프라인은 **K-Fashion**(속성·라벨, `FashionMTLModel` → `FashionHarmonyModel`)과 **Polyvore-U**(세트 조화)로 나뉜다. K-Fashion은 **기존 방식의 한계**와 **최종 전처리**를 대조해 정리한다.
+
+<a id="k-fashion-preprocessing"></a>
+##### K-Fashion (속성 분류)
+
+**데이터**: AI Hub K-Fashion (라벨 JSON — 스타일·재질·패턴)
+
+###### 기존 방식의 한계 (`FashionMTLModel`)
+
+| 항목 | 내용 |
+|------|------|
+| 클래스 수 | 재질 **97**, 패턴 **70** — 과도한 세분화 |
+| 불균형 | **무지** 패턴이 전체 **60% 이상** |
+| 샘플링 | 균등 샘플링 없이 원본 분포 그대로 사용 |
+| 정규화 | **Normalize 미적용** |
+| 결과 | 희귀 클래스 예측 실패 — Macro F1 **0.12~0.18** |
+
+###### 최종 방식 (`FashionHarmonyModel`)
+
+**1. 클래스 통합** — 실용 수준으로 축소. 서비스 속성 헤드와 동일(**재질 8 · 패턴 9 · 스타일 10**).
+
+| 항목 | 기존 | 최종 |
+|------|------|------|
+| 재질 | 97개 | **8개** — 데님, 니트, 실크, 가죽, 울, 면, 패딩, 기타 |
+| 패턴 | 70개 | **9개** — 무지, 스트라이프, 체크, 도트, 플로럴, 그래픽, 호피·뱀피, 카무플라쥬, 기타 |
+| 스타일 | 24개 | **10개** — 캐주얼, 고프코어, 미니멀, 긱시크, 로맨틱, 빈티지, 포멀, Y2K, 스트리트, 스포티 |
+
+**2. 데이터 수집**
+
+- 원본 **967,806**장(zip 3개)
+- 스타일별 **5,000**장 샘플링 → 학습 **50,000**장
+- 스타일 라벨 **24 → 10** 매핑 후 사용
+
+**3. 클래스 불균형 처리**
+
+| 시도 | 내용 | 결과 |
+|------|------|------|
+| 균등 샘플링 | 무지 **30,000 → 2,000** 등으로 다운샘플 | **전체 정확도 하락** — 채택 안 함 |
+| **최종** | 전체 **50,000**장 유지 + **Class Weight** | 희귀 클래스에 높은 가중치 → 학습 시 보완 ([§4.2](#k-fashion-retrain)) |
+
+**4. 데이터 증강**
+
+공통: RandomCrop(256→224), RandomHorizontalFlip(p=0.5), ColorJitter.
+
+**기존 대비 추가·변경**:
+
+| 기법 | 설정 | 목적 |
+|------|------|------|
+| RandomRotation | ±20° | 스트라이프 **방향** 다양화 |
+| RandomPerspective | p=0.3 | 원근 변환 |
+| RandomGrayscale | p=0.1 | 색이 아닌 **패턴** 자체 학습 |
+| **Normalize** | mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]` | **기존에 없던** ImageNet 정규화 |
+
+<a id="polyvore-preprocessing"></a>
+##### Polyvore-U (세트 조화)
+
+##### 1단계 — 데이터 수집
+
+- Hugging Face **`Marqo/polyvore`**
+- 이미지 **84,686**장, outfit 세트 **20,062**개
+
+##### 2단계 — Outfit 그룹핑
+
+- `item_ID.rsplit('_', 1)[0]`로 **outfit 단위** 그룹핑
+- 아이템 **2개 이상**인 outfit만 사용
+
+##### 3단계 — Positive / Negative 쌍 생성
+
+| 유형 | 정의 |
+|------|------|
+| **Positive** | 같은 outfit 내 아이템(전문가 코디) |
+| **Negative** | 다른 outfit 아이템 절반 + 현재 outfit 아이템 절반을 섞어 구성 |
+| **비율** | Positive : Negative = **1 : 1** |
+
+##### 4단계 — 패딩 처리
+
+- outfit당 아이템 **최대 4개**
+- 4개 미만이면 **zero tensor** 패딩
+- **mask**로 실제 아이템과 패딩 구분 — `mask=1` 실제, `mask=0` 패딩(서비스 Set 입력과 동일)
 
 #### 4.1 Polyvore-U로 통합 조화 모델 학습 (FashionHarmonyModel)
 
 **모델 골격**: EfficientNet-B3 특징 → **AttributeHeads**(카테고리·재질·패턴·스타일 등) → **Set Transformer**(패딩 마스크와 함께 세트 전체 조화 점수 0~1). 서비스에 올린 구현 요약은 [§5 현재 서비스](#improved-pipeline)의 **FashionHarmonyModel** 안내를, 코드·차원은 `models/fashion_harmony.py`를 본다.
 
-**데이터 (Hugging Face `Marqo/polyvore`)**
+**데이터 (Hugging Face `Marqo/polyvore`)** — 전처리는 [Polyvore-U](#polyvore-preprocessing) 절.
 
 | 항목 | 규모 |
 |------|------|
@@ -225,7 +308,7 @@ flowchart TB
 
 **문제**: `FashionMTLModel` 계열의 **과다 클래스**와 자동 라벨 노이즈로 희귀 클래스가 잘 안 잡힘.
 
-**대응**: **AI Hub K-Fashion** 파싱, 스타일별 샘플링, **소수 그룹**(연구 노트 기준 예: 재질 8·패턴 9·스타일 10 등)으로 재정의·전문가 라벨 방향.
+**대응**: **AI Hub K-Fashion** 파싱, 스타일별 샘플링, **소수 그룹**(재질 8·패턴 9·스타일 10)으로 재정의. [K-Fashion 전처리(기존 vs 최종)](#k-fashion-preprocessing) 참고.
 
 | 항목 | 규모 |
 |------|------|
