@@ -325,7 +325,11 @@ flowchart TB
 | pattern | **0.809** |
 | 평균 | **0.617** |
 
-스타일은 **단일 아이템**보다 **전체 코디**가 있어야 하는 태스크라 정확도가 상대적으로 낮다.
+**스타일 정확도가 40%대인 이유**
+
+- 스타일은 「옷 한 벌」보다 **코디 전체**를 봐야 맞히기 쉬운데, 학습은 **한 장짜리 사진**으로 했다.
+- 재질·패턴은 그보다 잘 맞는다(위 표 참고).
+- 앱 화면에는 **「캐주얼」 같은 이름만** 보여 주고, **얼마나 확실한지(%)** 는 아직 안 보여 준다. 서버에는 확률 값이 있으니, 나중에 UI에 넣을 수 있다.
 
 #### 4.3 Set Transformer 재학습 (속성·라벨 정렬 후)
 
@@ -339,7 +343,7 @@ flowchart TB
 | MH-Attn (베이스라인) | Pairwise Acc | **0.756** |
 | FashionHarmony (재학습 후) | AUC | **0.871** |
 
-AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조화를 직접 학습한 통합 모델**로 실무 수준 판별 품질을 올렸고, **0.912 → 0.871**처럼 수치가 내려가도 **K-Fashion 라벨 신뢰도**와의 트레이드오프로 볼 수 있다.
+재학습 모델(**AUC 0.871**)은 베이스라인 MH-Attn(**Pairwise Acc 0.756**)보다 높다. 둘 다 「코디가 잘 어울리는지」를 보는 지표라, **기존 베이스라인보다 개선**되었다고 보면 된다.
 
 #### 4.4 성과·운영 시 한계(요약)
 
@@ -350,16 +354,12 @@ AUC와 Pairwise Accuracy는 **프로토콜이 다르다**. 다만 **세트 조�
 | 웹캠 | 없음 | MediaPipe·YOLO 의류 크롭 + `webcam-harmony` 실시간(10초)·캡처 + `predict-harmony`(캔버스) |
 | 서비스 | API 단편 | FastAPI + React |
 
-| # | 한계 |
+| # | 알아두면 좋은 점 |
 |---|------|
-| 1 | 스타일은 단일 이미지로 한계 — 전체 코디 맥락 필요 |
-| 2 | 축별 **독립 조화 라벨** 부재 → 세부 점수 **모델 직접 분해** 어려움 → **FashionCLIP**(색 조화·`reasons` 문구)과 총점 구간 문장으로 보완, **캔버스 슬롯·카테고리**는 **OpenAI CLIP**(`clip-vit-base-patch32`) |
-| 3 | 세부 점수 스키마: **`score_color`** 는 FashionCLIP 색 점수(0~100), **`score_texture`·`score_pattern`·`score_style`** 는 스키마 호환용 **`score_total`의 0.95배** — [§5.3](#predict-harmony-api) 참고 |
-
-**이 저장소와의 대응**
-
-- **조화·아이템 속성(한국어 클래스)**: 동일 **`FashionHarmonyModel`** + 체크포인트 **`models/fashion_harmony_retrained.pt`**. 속성 헤드 차원은 **`models/fashion_harmony.py`** 기준 **카테고리 5 · 재질 8 · 패턴 9 · 스타일 10**(속성 벡터 32차원 결합 후 Set 입력).
-- **레거시 `FashionMTLModel`**(`models/fashion_mtl.py`)는 과거 실험·참고용으로 남아 있으며, **현재 `main.py` API 경로에서는 로드하지 않는다.**
+| 1 | **스타일** 이름은 옷 한 장만으로는 잘 안 맞는다(학습 정확도 약 40%). 코디 전체를 봐야 한다. |
+| 2 | **재질·패턴·스타일마다 따로 매긴 조화 점수** 는 없다. 대신 **총점**, **색**, **말풍선 피드백** 으로 설명한다. |
+| 3 | API에는 `score_texture` 등 **세부 점수 칸** 이 있지만, 보통 **총점의 95%** 로 채운다. **화면에는 총점만** 크게 보인다. |
+| 4 | **「캐주얼」 같은 속성 이름** 은 AI 추정이다. **확실한지 %** 는 화면에 안 나온다. |
 
 ---
 
@@ -461,14 +461,18 @@ flowchart TD
 
 - **카테고리 분리**: `beforeItems`·`afterItems`를 합쳐 이미지를 로드한 뒤, `category`가 없으면 **OpenAI CLIP**으로 `상의`·`하의`·`모자`·`신발`·`악세서리` 중 하나를 고른다. **신발·모자·악세서리**는 “악세서리 이미지” 목록으로만 색·피드백에 쓰이며, **FashionHarmony** Set 조화 텐서에는 **메인 의류만**(최대 4장) 넣는다. 메인이 비고 악세서리만 있으면 서버가 메인으로 옮겨 처리한다.
 - **총점 `score_total`**: 메인 최대 4장의 **FashionHarmony** raw(0~1)와, 메인+악세서리를 가로로 이은 이미지의 **FashionCLIP 색 점수**(0~1)를 **`harmony_raw × 0.75 + color × 0.25`** 로 합친 뒤 0~100으로 반올림한다.
-- **`score_color`**: 위 FashionCLIP 색 분기의 **퍼센트 값**(0~100 근사). **`score_texture`·`score_pattern`·`score_style`** 은 스키마 호환을 위해 **`score_total`의 약 0.95배**로 채우며, 축별 독립 추정은 아니다.
-- **`reasons`**: 말풍선 피드백 문장 배열. 생성 방식은 [XAI (설명 가능 AI)](#xai-explainability) 절을 본다.
-- **`debug`**: 경과 시간, 메인/악세서리 이미지 수, `harmony_raw`, `color_score`, **`attention_weights`**(아이템 간 attention 행렬), 메인 이미지별 `classify_attributes` 결과 등.
+- **`score_color`**: 색이 얼마나 잘 맞는지(0~100). 총점을 만들 때 25% 반영한다.
+- **`score_texture`·`score_pattern`·`score_style`**:
+  - 화면에는 **안 보인다**.
+  - API·히스토리용 칸인데, 보통 **총점 × 0.95** 로 채운다. 재질·패턴·스타일을 **각각 따로 점수 매긴 게 아니다**.
+  - 예전 룰북(`harmony.py`)이 켜진 경우에만 진짜 규칙 점수가 들어갈 수 있다.
+- **`reasons`**: 오른쪽 말풍선 문장. [XAI](#xai-explainability) 참고.
 
 #### 5.4 응답·운용 시 유의사항
 
 - **기준 코디가 비어 있으면** 중립 점수(50대)와 고정 안내 문구를 반환한다.
 - **미리보기 전용** API는 조화 점수 없이 검출·크롭 정보만 반환한다.
+- **재질·패턴·스타일** 이름은 참고용이다. 특히 **스타일**은 맞추기 어렵다. **총점·말풍선·색** 을 먼저 보면 된다.
 
 UI 속성 라벨과 조화 모델 내부 헤드의 클래스 구성은 다를 수 있다. MTL·버킷 매핑과 K-Fashion 맥락은 [4.2절](#k-fashion-retrain)을 참고한다.
 
@@ -703,10 +707,10 @@ flowchart TB
   - `POST /api/predict-harmony`가 before(및 선택 after) 아이템 이미지를 받아 조화를 계산한다.
   - 출력 항목:
     - 총점(`score_total`): FashionHarmony 세트 raw와 FashionCLIP 색 점수를 **75% / 25%**로 합성한 0~100 점수.
-    - 세부 점수: `score_color`(FashionCLIP 색), `score_texture`·`score_pattern`·`score_style`(스키마 호환용으로 `score_total`의 약 0.95배).
+    - 세부 점수: 색 점수만 의미 있음. 재질·패턴·스타일 점수 칸은 API용이며 화면에는 안 나옴([§5.3](#predict-harmony-api)).
     - 해석 문장(`reasons`) 및 디버그 정보(`debug`). XAI 상세는 [XAI (설명 가능 AI)](#xai-explainability) 절.
 - **패션 속성 분류(통합 모델)**
-  - **`FashionHarmonyModel`**의 속성 헤드로 재질·패턴·스타일·카테고리(한국어 클래스)를 예측한다(`POST /api/classify-fashion-attributes`).
+  - 재질·패턴·스타일·종류를 한글 이름으로 맞춘다(`POST /api/classify-fashion-attributes`). 서버는 확률도 알려 주지만, **화면에는 이름만** 보여 준다.
 - **의류 타입 분류(슬롯용)**
   - 상의/하의/모자/신발/악세서리를 **OpenAI CLIP**(`clip-vit-base-patch32`)으로 분류한다(`POST /api/classify-clothing-type`).
   - 로드 실패·오류 시 응답은 `clothing_type` 기본값 등으로 폴백할 수 있으며, **ImageNet 계열 보조 분류기는 현재 `main.py`에 연결되어 있지 않다.**
