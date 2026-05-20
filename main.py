@@ -1323,13 +1323,10 @@ class HarmonyRequest(BaseModel):
     afterItems:  List[PlacedItemRequest]
 
 class HarmonyResponse(BaseModel):
-    score_total:   float
-    score_color:   float
-    score_texture: float
-    score_pattern: float
-    score_style:   float
-    reasons:       List[str]
-    debug:         Dict
+    score_total: float
+    score_color: float
+    reasons:     List[str]
+    debug:       Dict
 
 class HistorySaveRequest(BaseModel):
     beforeItems:  List[PlacedItemRequest]
@@ -1462,9 +1459,10 @@ async def predict_harmony(request: HarmonyRequest):
     try:
         if not request.beforeItems:
             return HarmonyResponse(
-                score_total=50.0, score_color=50.0,
-                score_texture=60.0, score_pattern=70.0, score_style=70.0,
-                reasons=["Before 아이템이 없어 중립으로 계산"], debug={}
+                score_total=50.0,
+                score_color=50.0,
+                reasons=["Before 아이템이 없어 중립으로 계산"],
+                debug={},
             )
 
         main_imgs            = []
@@ -1533,9 +1531,10 @@ async def predict_harmony(request: HarmonyRequest):
 
         if not main_imgs and not accessory_imgs:
             return HarmonyResponse(
-                score_total=50.0, score_color=50.0,
-                score_texture=60.0, score_pattern=70.0, score_style=70.0,
-                reasons=["이미지를 로드할 수 없어 중립으로 계산"], debug={}
+                score_total=50.0,
+                score_color=50.0,
+                reasons=["이미지를 로드할 수 없어 중립으로 계산"],
+                debug={},
             )
 
         if not main_imgs:
@@ -1561,15 +1560,9 @@ async def predict_harmony(request: HarmonyRequest):
         if rule_result is not None:
             score_total = round(0.5 * model_total + 0.5 * float(rule_result["score_total"]), 1)
             score_color = float(rule_result["score_color"])
-            score_texture = float(rule_result["score_texture"])
-            score_pattern = float(rule_result["score_pattern"])
-            score_style = float(rule_result["score_style"])
         else:
             score_total = model_total
             score_color = float(result["color_score"])
-            score_texture = round(model_total * 0.95, 1)
-            score_pattern = round(model_total * 0.95, 1)
-            score_style = round(model_total * 0.95, 1)
 
         # 최종 총점·수정된 속성으로 피드백 재생성 (analyze_outfit 시점 점수와 불일치 방지)
         reasons = generate_explanation(
@@ -1603,9 +1596,6 @@ async def predict_harmony(request: HarmonyRequest):
         return HarmonyResponse(
             score_total=score_total,
             score_color=score_color,
-            score_texture=score_texture,
-            score_pattern=score_pattern,
-            score_style=score_style,
             reasons=reasons,
             debug={
                 "elapsed":             elapsed,

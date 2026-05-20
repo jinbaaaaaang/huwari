@@ -21,9 +21,6 @@ interface HistoryItem {
   harmonyScore: {
     score_total: number
     score_color: number
-    score_texture: number
-    score_pattern: number
-    score_style: number
     reasons: string[]
     debug: any
   }

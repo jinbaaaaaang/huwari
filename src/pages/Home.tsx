@@ -27,9 +27,6 @@ interface PlacedItem {
 interface HarmonyScore {
   score_total: number
   score_color: number
-  score_texture: number
-  score_pattern: number
-  score_style: number
   reasons: string[]
   debug: any
 }
@@ -873,9 +870,6 @@ function Home() {
         setHarmonyScore(prev => ({
           score_total: prev?.score_total ?? 0,
           score_color: prev?.score_color ?? 0,
-          score_texture: prev?.score_texture ?? 0,
-          score_pattern: prev?.score_pattern ?? 0,
-          score_style: prev?.score_style ?? 0,
           reasons: data.reasons ?? [],
           debug: { source: 'webcam-harmony', crop_method: data.crop_method },
         }))
@@ -900,15 +894,12 @@ function Home() {
     setWebcamLiveScore(Math.round(total))
     setWebcamCropMethod(data.crop_method ?? null)
     setWebcamLiveItems(data.live_items?.length ? data.live_items : null)
-    setHarmonyScore(prev => ({
+    setHarmonyScore({
       score_total: total,
       score_color: color,
-      score_texture: prev?.score_texture ?? total,
-      score_pattern: prev?.score_pattern ?? total,
-      score_style: prev?.score_style ?? total,
       reasons: data.reasons ?? [],
       debug: { source: 'webcam-harmony' },
-    }))
+    })
   }
 
   const callWebcamHarmony = async (blob: Blob): Promise<WebcamHarmonyResponse | null> => {
