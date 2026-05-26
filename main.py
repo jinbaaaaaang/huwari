@@ -53,6 +53,13 @@ except ImportError:
     HAS_MEDIAPIPE = False
     mp = None
 
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+    cv2 = None
+
 FASHION_CLIP_MODEL_ID = "hf-hub:Marqo/marqo-fashionCLIP"
 CATEGORY_CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
 
@@ -243,31 +250,100 @@ def _encode_crop_item(
     }
 
 
-def _mediapipe_pose_crops(
-    image: Image.Image,
-) -> Optional[List[Tuple[str, Image.Image, Tuple[int, int, int, int]]]]:
-    """MediaPipe 관절 기반 의류 크롭(상·하의·신발). 있는 영역만 반환, 상의 단독 허용."""
+# MediaPipe BlazePose 33-point 인덱스 (mp.solutions 없이도 안전)
+_MP_LEFT_SHOULDER  = 11
+_MP_RIGHT_SHOULDER = 12
+_MP_LEFT_HIP       = 23
+_MP_RIGHT_HIP      = 24
+
+
+def correct_perspective(image: Image.Image, landmarks) -> Image.Image:
+    """
+    어깨/허리 관절 기준으로 원근 왜곡을 Homography로 보정.
+    cv2가 없거나 관절 visibility가 부족하면 원본을 그대로 반환한다.
+    """
+    if not HAS_CV2:
+        return image
+    try:
+        ls = landmarks[_MP_LEFT_SHOULDER]
+        rs = landmarks[_MP_RIGHT_SHOULDER]
+        lh = landmarks[_MP_LEFT_HIP]
+        rh = landmarks[_MP_RIGHT_HIP]
+        if any(not _landmark_visible(lm) for lm in (ls, rs, lh, rh)):
+            return image
+
+        img_np = np.array(image)
+        h, w = img_np.shape[:2]
+
+        src = np.float32([
+            [ls.x * w, ls.y * h],
+            [rs.x * w, rs.y * h],
+            [lh.x * w, lh.y * h],
+            [rh.x * w, rh.y * h],
+        ])
+
+        shoulder_w = abs(rs.x - ls.x) * w
+        hip_w      = abs(rh.x - lh.x) * w
+        body_h     = abs(lh.y - ls.y) * h
+        if shoulder_w < 1 or hip_w < 1 or body_h < 1:
+            return image
+
+        cx, cy = w / 2, h / 2
+        dst = np.float32([
+            [cx - shoulder_w / 2, cy - body_h / 2],
+            [cx + shoulder_w / 2, cy - body_h / 2],
+            [cx - hip_w / 2,      cy + body_h / 2],
+            [cx + hip_w / 2,      cy + body_h / 2],
+        ])
+
+        M, _ = cv2.findHomography(src, dst)
+        if M is None:
+            return image
+        corrected = cv2.warpPerspective(img_np, M, (w, h))
+        return Image.fromarray(corrected)
+    except Exception as exc:
+        print(f"원근 보정 실패: {exc}")
+        return image
+
+
+def _run_pose(image: Image.Image):
+    """현재 _pose_backend에 맞춰 관절 리스트를 반환. 실패 시 None."""
     pose = get_pose_model()
     if pose is None:
         return None
-
-    img_w, img_h = image.size
     try:
         if _pose_backend == "solutions":
             results = pose.process(np.array(image))
             if not results.pose_landmarks:
                 return None
-            lms = results.pose_landmarks.landmark
-        else:
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.asarray(image))
-            results = pose.detect(mp_image)
-            if not results.pose_landmarks:
-                return None
-            lms = results.pose_landmarks[0]
+            return results.pose_landmarks.landmark
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.asarray(image))
+        results = pose.detect(mp_image)
+        if not results.pose_landmarks:
+            return None
+        return results.pose_landmarks[0]
     except Exception as exc:
-        print(f"MediaPipe 추론 실패, YOLO 폴백: {exc}")
+        print(f"MediaPipe 추론 실패: {exc}")
         return None
 
+
+def _mediapipe_pose_crops(
+    image: Image.Image,
+) -> Optional[List[Tuple[str, Image.Image, Tuple[int, int, int, int]]]]:
+    """MediaPipe 관절 기반 의류 크롭(상·하의·신발). 있는 영역만 반환, 상의 단독 허용."""
+    lms = _run_pose(image)
+    if lms is None:
+        return None
+
+    # 어깨·허리가 충분히 보이면 원근 보정 후 보정 이미지에서 재추출
+    corrected = correct_perspective(image, lms)
+    if corrected is not image:
+        recomputed = _run_pose(corrected)
+        if recomputed is not None:
+            image = corrected
+            lms = recomputed
+
+    img_w, img_h = image.size
     region_boxes: Dict[str, Optional[Tuple[int, int, int, int]]] = {
         "상의": _bbox_from_landmarks(lms, [11, 12, 23, 24], img_w, img_h, pad_ratio=0.08),
         "하의": _bbox_from_landmarks(lms, [23, 24, 25, 26], img_w, img_h, pad_ratio=0.08, min_visible=2),
@@ -643,7 +719,7 @@ def _replace_score_summary(reasons: List[str], harmony_score: float) -> List[str
     """룰북 병합 후 최종 총점에 맞게 종합 문장만 갱신."""
     filtered = [r for r in reasons if r not in _SCORE_SUMMARY_LINES]
     filtered.append(_score_summary_line(harmony_score))
-    return filtered[: _FEEDBACK_MAX_LINES + 1]
+    return filtered[: _FEEDBACK_MAX_LINES]
 
 
 def _prepend_unique_lines(target: List[str], lines: List[str], max_add: int = 2) -> None:
@@ -926,7 +1002,7 @@ def generate_explanation(
     explanations = [e for e in explanations if e not in _SCORE_SUMMARY_LINES]
     explanations.append(_score_summary_line(harmony_score))
 
-    return explanations[: _FEEDBACK_MAX_LINES + 1]
+    return explanations[: _FEEDBACK_MAX_LINES]
 
 
 def analyze_outfit(
