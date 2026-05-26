@@ -9,6 +9,8 @@ import {
   STYLE_CLASS_OPTIONS,
 } from '../constants/fashionClassOptions'
 import { OUTFIT_GUIDE, accessoryLeftOccupied, isAccessoryCategory } from '../constants/outfitGuide'
+import { useStyleProfile } from '../hooks/useStyleProfile'
+import { pickPersonalizationLine } from '../lib/styleHistory'
 
 interface PlacedItem {
   id: string
@@ -557,6 +559,39 @@ function Home() {
     harmonyScore?.reasons,
   ])
 
+  // localStorage 히스토리 기반 개인화 한 줄(피드백 리스트 맨 앞에 끼워 넣음)
+  const { profile: styleProfile } = useStyleProfile()
+  const personalizationLine = useMemo(() => {
+    if (inputMode === 'webcam') return null
+    if (isLoadingHarmony) return null
+    const score = harmonyScore?.score_total
+    if (score == null) return null
+    const mainItems = beforeItems.filter(
+      (it) => !isAccessoryCategory(it.category),
+    )
+    const currentStyles = mainItems
+      .map((it) => it.style ?? '')
+      .filter(Boolean)
+    const currentColors: string[] = []
+    for (const it of mainItems) {
+      if (!Array.isArray(it.colors)) continue
+      for (const c of it.colors) {
+        const hex = typeof c?.hex === 'string' ? c.hex.toLowerCase() : ''
+        if (hex) currentColors.push(hex.startsWith('#') ? hex : `#${hex}`)
+      }
+    }
+    return pickPersonalizationLine(styleProfile, score, {
+      currentStyles,
+      currentColors,
+    })
+  }, [
+    styleProfile,
+    harmonyScore?.score_total,
+    isLoadingHarmony,
+    inputMode,
+    beforeItems,
+  ])
+
   const feedbackRows = useMemo(() => {
     if (inputMode === 'webcam') {
       if (!isCameraOn) {
@@ -601,11 +636,30 @@ function Home() {
             : null,
       }))
     }
-    const n = Math.max(FEEDBACK_MIN_ROWS, reasons.length)
-    return Array.from({ length: n }, (_, i) => ({
-      id: `reason-${i}-${reasons[i] ?? 'empty'}`,
-      text: reasons[i] ?? null,
+    const baseRows = reasons.map((r, i) => ({
+      id: `reason-${i}-${r ?? 'empty'}`,
+      text: r ?? null,
     }))
+    const withPersonal = personalizationLine
+      ? [
+          {
+            id: `personal-${personalizationLine.key}`,
+            text: personalizationLine.text,
+          },
+          ...baseRows,
+        ]
+      : baseRows
+    const padded =
+      withPersonal.length < FEEDBACK_MIN_ROWS
+        ? [
+            ...withPersonal,
+            ...Array.from(
+              { length: FEEDBACK_MIN_ROWS - withPersonal.length },
+              (_, i) => ({ id: `pad-${i}`, text: null as string | null }),
+            ),
+          ]
+        : withPersonal
+    return padded
   }, [
     isLoadingHarmony,
     isWebcamLiveLoading,
@@ -613,6 +667,7 @@ function Home() {
     webcamStatusMessage,
     inputMode,
     isCameraOn,
+    personalizationLine,
   ])
 
   // 조화 점수·피드백 API (debounce) — 아이템 추가·삭제·속성 변경 시 재생성
@@ -1345,7 +1400,7 @@ function Home() {
             </div>
 
             {/* 분석 결과 */}
-            <div className="bg-[#FAFAF8] p-4 border-t border-secondary h-[260px] overflow-y-auto scrollbar-thin shrink-0">
+            <div className="bg-[#FAFAF8] p-4 border-t border-secondary h-[230px] overflow-y-auto scrollbar-thin shrink-0">
               <div className="flex items-center gap-2 mb-4 flex-wrap">
                 <h4 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">
                   분석 결과
@@ -1495,15 +1550,13 @@ function Home() {
               <h3 className="text-xs font-regular text-secondary uppercase tracking-wider inline-block px-3 py-1 border border-secondary rounded-full">코디 평가</h3>
             </div>
             
-            {/* 피드백(위) + 점수/조화(아래 260px) — 왼쪽 분석 결과 패널과 높이·구분선 정렬 */}
+            {/* 피드백(위) + 점수/조화(아래 230px) — 왼쪽 분석 결과 패널과 높이·구분선 정렬 */}
             <div className="flex-1 flex flex-col min-h-0">
               {/* 피드백 */}
               <div className="flex-1 min-h-0 flex flex-col bg-[#FAFAF8]">
-                <div className="shrink-0 px-4 pt-4 pb-2">
-                </div>
-                <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 pb-5">
-                  <div className="min-h-full flex flex-col justify-center py-4">
-                    <div className="space-y-4">
+                <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 py-2">
+                  <div className="min-h-full flex flex-col justify-center">
+                    <div className="space-y-1">
                     {feedbackRows.map((row) => {
                       const hasText = row.text != null && row.text !== ''
                       return (
@@ -1552,7 +1605,7 @@ function Home() {
               </div>
 
               {/* 조화 점수와 캐릭터 — 왼쪽 분석 결과와 동일 h·border-t */}
-              <div className="h-[260px] shrink-0 border-t border-secondary bg-[#FAFAF8] p-4 overflow-hidden flex flex-col justify-center">
+              <div className="h-[230px] shrink-0 border-t border-secondary bg-[#FAFAF8] p-4 overflow-hidden flex flex-col justify-center">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-[#FAFAF8] p-3 flex flex-col items-center justify-center">
                     <div className="w-28 h-28 bg-secondary flex items-center justify-center rounded-full mb-2">

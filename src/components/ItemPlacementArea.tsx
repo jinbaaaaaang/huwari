@@ -5,6 +5,7 @@ import {
   inferCategoryFromCanvasPosition,
   isAccessoryCategory,
 } from '../constants/outfitGuide'
+import { appendLocalHistory, buildEntry } from '../lib/styleHistory'
 
 interface ItemPlacementAreaProps {
   buttonText: string
@@ -244,12 +245,9 @@ const ItemPlacementArea = ({
           category: clothingType,
         }
 
-        // 처리 완료된 아이템을 화면에 추가 (부모에 즉시 반영 → 조화·피드백 재생성)
+        // 처리 완료된 아이템을 화면에 추가한다. 부모 동기화는 아래 useEffect에서 렌더 이후 처리한다.
         setPlacedItems((prev) => {
           const next = [...prev, newItem]
-          const json = JSON.stringify(next)
-          prevPlacedJsonRef.current = json
-          onItemsChange?.(next)
           return next
         })
 
@@ -532,6 +530,7 @@ const ItemPlacementArea = ({
   }
 
   // 레이아웃 이미지 생성 함수
+  // 배치된 아이템의 bounding box만 추려서 정사각형 캔버스에 가운데로 그린다.
   const generateLayoutImage = async (): Promise<string | null> => {
     try {
       if (!containerRef.current || placedItems.length === 0) {
@@ -540,56 +539,65 @@ const ItemPlacementArea = ({
 
       const container = containerRef.current
       const containerRect = container.getBoundingClientRect()
-      
-      // 캔버스 크기를 컨테이너 크기에 맞춤
-      const canvasWidth = containerRect.width
-      const canvasHeight = containerRect.height
-      
-      // 캔버스 생성
-      const canvas = document.createElement('canvas')
-      canvas.width = canvasWidth
-      canvas.height = canvasHeight
-      const ctx = canvas.getContext('2d')
-      
-      if (!ctx) {
-        return null
-      }
+      const containerW = containerRect.width
+      const containerH = containerRect.height
 
-      // 배경색 설정 (cream 색상 - Tailwind와 동일)
-      ctx.fillStyle = '#FFFFFF' // white 배경
+      // 배치된 아이템의 픽셀 좌표 bounding box 계산
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      for (const it of placedItems) {
+        const x = (it.x / 100) * containerW - (it.width / 2)
+        const y = (it.y / 100) * containerH
+        minX = Math.min(minX, x)
+        minY = Math.min(minY, y)
+        maxX = Math.max(maxX, x + it.width)
+        maxY = Math.max(maxY, y + it.height)
+      }
+      if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
+
+      const bboxW = Math.max(1, maxX - minX)
+      const bboxH = Math.max(1, maxY - minY)
+      const side = Math.max(bboxW, bboxH)
+      const padding = side * 0.08
+      const canvasSize = Math.round(side + padding * 2)
+
+      const canvas = document.createElement('canvas')
+      canvas.width = canvasSize
+      canvas.height = canvasSize
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+
+      ctx.fillStyle = '#FAFAF8'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-      // 각 아이템을 캔버스에 그리기 (순서대로)
-      const imagePromises = placedItems.map((item) => {
+      // bbox를 정사각형 가운데에 배치하기 위한 오프셋
+      const offsetX = padding + (side - bboxW) / 2 - minX
+      const offsetY = padding + (side - bboxH) / 2 - minY
+
+      const imagePromises = placedItems.map((it) => {
         return new Promise<void>((resolve) => {
           const img = new Image()
           img.crossOrigin = 'anonymous'
-          
+
           img.onload = () => {
-            // 아이템의 위치는 퍼센트, 크기는 픽셀
-            // 퍼센트를 픽셀로 변환
-            const x = (item.x / 100) * canvasWidth - (item.width / 2) // transform: translate(-50%, 0) 반영
-            const y = (item.y / 100) * canvasHeight
-            const width = item.width
-            const height = item.height
-            
-            ctx.drawImage(img, x, y, width, height)
+            const x = (it.x / 100) * containerW - (it.width / 2) + offsetX
+            const y = (it.y / 100) * containerH + offsetY
+            ctx.drawImage(img, x, y, it.width, it.height)
             resolve()
           }
-          
+
           img.onerror = () => {
-            console.error('이미지 로드 실패:', item.imageUrl)
-            resolve() // 실패해도 계속 진행
+            console.error('이미지 로드 실패:', it.imageUrl)
+            resolve()
           }
-          
-          img.src = item.imageUrl
+
+          img.src = it.imageUrl
         })
       })
 
-      // 모든 이미지 로드 대기
       await Promise.all(imagePromises)
-
-      // 캔버스를 base64로 변환
       return canvas.toDataURL('image/png')
     } catch (error) {
       console.error('레이아웃 이미지 생성 실패:', error)
@@ -663,6 +671,13 @@ const ItemPlacementArea = ({
               const data = await response.json()
               
               if (data.success) {
+                try {
+                  appendLocalHistory(
+                    buildEntry(placedItems, harmonyScore.score_total),
+                  )
+                } catch (err) {
+                  console.warn('localStorage 히스토리 저장 실패:', err)
+                }
                 alert('히스토리에 저장되었습니다!')
                 if (onSave) {
                   onSave(placedItems)
