@@ -326,7 +326,7 @@ export function pickPersonalizationLine(
     if (diff <= -5) {
       return {
         key: 'above-avg',
-        text: `평소보다 ${Math.abs(diff)}점 높은 코디예요 ✓`,
+        text: `평소보다 ${Math.abs(diff)}점 높은 코디예요`,
       }
     }
   }
