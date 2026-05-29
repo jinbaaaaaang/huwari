@@ -496,6 +496,20 @@ STYLE_MATRIX = {
 STYLE_NEUTRAL = 75  # 정의되지 않은 조합
 
 
+def _build_style_reason(score: float, style_a: str, style_b: str) -> str:
+    """
+    스타일 조합 점수에 따라 자연스러운 피드백 문장을 생성한다.
+    가운뎃점(·)으로 두 스타일을 묶어 와/과 조사 문제를 회피한다.
+    """
+    if style_a == style_b:
+        return f"{style_a} 스타일로 통일감 있게 정리된 코디예요"
+    if score < 70:
+        return f"{style_a} · {style_b} 스타일이 서로 부딪혀 전체 톤이 흔들려요"
+    if score >= 90:
+        return f"{style_a} · {style_b} 스타일이 자연스럽게 어우러진 코디예요"
+    return f"{style_a} · {style_b} 스타일이 함께 섞여 개성이 살아나는 코디예요"
+
+
 def get_style_score(style1: Optional[str], style2: Optional[str]) -> int:
     """스타일 점수 조회"""
     if not style1 or not style2:
@@ -566,12 +580,12 @@ def calculate_style_score(
         max_pair = max(pair_details, key=lambda x: x['score'])
         
         if min_pair['score'] < 70:
-            reasons.append(f"스타일: {min_pair['before']}와(과) {min_pair['after']} 조합이 조화롭지 않음")
+            reasons.append(_build_style_reason(min_pair['score'], min_pair['before'], min_pair['after']))
         elif max_pair['score'] >= 90:
-            reasons.append(f"스타일: {max_pair['before']}와(과) {max_pair['after']} 조합이 잘 어울림")
+            reasons.append(_build_style_reason(max_pair['score'], max_pair['before'], max_pair['after']))
         else:
-            reasons.append(f"스타일: {max_pair['before']}와(과) {max_pair['after']} 조합")
-        
+            reasons.append(_build_style_reason(max_pair['score'], max_pair['before'], max_pair['after']))
+
         debug_info['all_scores'] = all_scores
         debug_info['avg_score'] = avg_score
         debug_info['pairs'] = pair_details
@@ -612,11 +626,11 @@ def calculate_style_score(
     max_pair = max(pair_details, key=lambda x: x['score'])
     
     if min_pair['score'] < 70:
-        reasons.append(f"스타일: {min_pair['before']}와(과) {min_pair['after']} 조합이 조화롭지 않음")
+        reasons.append(_build_style_reason(min_pair['score'], min_pair['before'], min_pair['after']))
     elif max_pair['score'] >= 90:
-        reasons.append(f"스타일: {max_pair['before']}와(과) {max_pair['after']} 조합이 잘 어울림")
+        reasons.append(_build_style_reason(max_pair['score'], max_pair['before'], max_pair['after']))
     else:
-        reasons.append(f"스타일: {max_pair['before']}와(과) {max_pair['after']} 조합")
+        reasons.append(_build_style_reason(max_pair['score'], max_pair['before'], max_pair['after']))
     
     debug_info['all_scores'] = all_scores
     debug_info['avg_score'] = avg_score
