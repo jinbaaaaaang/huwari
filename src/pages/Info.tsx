@@ -106,7 +106,13 @@ const GINI_MOODS = [
     label: '나쁨',
     range: '0 ~ 39점',
     anim: 'animate-harmony-gini-angry',
-    desc: '점수가 낮을 때 말풍선에 개선·부정 톤 문장(색·패턴·스타일 충돌 등)이 더 자주 표시됩니다. 아이템 교체나 속성 수정을 시도해 보세요.',
+    desc: (
+      <>
+        점수가 낮을 때 말풍선에 개선·부정 톤 문장이 더 자주 표시됩니다.
+        <br />
+        아이템 교체나 속성 수정을 시도해 보세요.
+      </>
+    ),
   },
   {
     src: '/assets/normal_gini.svg',
@@ -114,7 +120,13 @@ const GINI_MOODS = [
     label: '보통',
     range: '40 ~ 69점',
     anim: 'animate-harmony-gini',
-    desc: '기본적인 조화는 갖추었지만, 한두 가지 요소를 바꾸면 더 안정적인 코디가 될 수 있습니다.',
+    desc: (
+      <>
+        기본적인 조화는 갖추었지만,
+        <br />
+        한두 가지 요소를 바꾸면 더 안정적인 코디가 될 수 있습니다.
+      </>
+    ),
   },
   {
     src: '/assets/happy_gini.svg',
@@ -122,7 +134,7 @@ const GINI_MOODS = [
     label: '좋음',
     range: '70 ~ 100점',
     anim: 'animate-harmony-gini-happy',
-    desc: '전체적으로 잘 어울리는 코디입니다. 세부 점수와 피드백 문장도 함께 참고하세요.',
+    desc: '전체적으로 잘 어울리는 코디입니다.',
   },
 ] as const
 
@@ -205,45 +217,6 @@ const Info = () => {
               HUWARI는 옷의 <span className="font-medium text-secondary">색감, 질감, 패턴, 스타일, 조화</span>를
               가볍게 살펴보고, 더 편안한 코디 선택을 돕는 웹 서비스입니다. 핵심에는 직접 설계·학습한{' '}
               <span className="font-medium text-secondary">FashionHarmony 모델</span>이 있습니다.
-            </p>
-          </div>
-        </div>
-
-        <div className="col-span-12 border-b border-secondary">
-          <SectionTitle>프로젝트 요약</SectionTitle>
-          <div className="p-8 pt-5 space-y-5">
-            <p className="text-xs text-secondary leading-relaxed">
-              HUWARI는 여러 모델을 단순히 연결한 서비스가 아니라,{' '}
-              <span className="font-medium text-secondary">패션 조화도 예측 모델 FashionHarmony</span>를 직접 설계·학습하고
-              이를 웹 서비스로 옮긴 프로젝트입니다. EfficientNet-B3 백본 위에 속성 헤드(재질·패턴·스타일)와
-              Set Transformer를 결합해, <span className="font-medium text-secondary">조화 예측과 속성 예측을 하나의 모델에서 공동 학습</span>하도록 설계했습니다.
-            </p>
-            <div className="border border-secondary rounded-xl overflow-hidden">
-              <div className="grid grid-cols-3">
-                {[
-                  { model: 'MLP', auc: '0.6957' },
-                  { model: 'MH-Attn (베이스라인)', auc: '0.7524' },
-                  { model: 'FashionHarmony', auc: '0.8710', highlight: true },
-                ].map((row, i) => (
-                  <div
-                    key={row.model}
-                    className={`p-5 text-center ${i < 2 ? 'border-r border-secondary' : ''} ${row.highlight ? 'bg-secondary/5' : ''}`}
-                  >
-                    <div className={`text-xs uppercase tracking-wider mb-2 ${row.highlight ? 'font-medium text-secondary' : 'text-secondary/80'}`}>
-                      {row.model}
-                    </div>
-                    <div className={`text-lg ${row.highlight ? 'font-medium text-secondary' : 'font-light text-secondary'}`}>
-                      AUC {row.auc}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <p className="text-xs text-secondary leading-relaxed">
-              베이스라인(MH-Attn) 대비 약 <span className="font-medium text-secondary">+0.12 AUC</span> 향상.
-              Ablation 결과, Set Transformer 같은 새 구조를 더하는 것만으로는 효과가 작았고,{' '}
-              <span className="font-medium text-secondary">K-Fashion 기반 도메인 사전학습과 속성 체계 정리</span>가
-              성능 향상에 더 크게 기여했습니다.
             </p>
           </div>
         </div>
