@@ -28,7 +28,7 @@ const FEATURES = [
   },
   {
     title: '조화 예측',
-    desc: 'FashionHarmony 세트 모델·FashionCLIP 색 점수·룰북 규칙을 합쳐 0~100 점수를 내고, XAI 기반 피드백 말풍선으로 이유를 설명합니다.',
+    desc: '직접 설계한 FashionHarmony 모델이 코디 전체를 한 세트로 보고 점수를 매기고, FashionCLIP 색 점수·룰북 규칙을 함께 합쳐 0–100점을 만듭니다. XAI 피드백 말풍선으로 이유까지 설명합니다.',
     icon: (
       <path
         strokeLinecap="round"
@@ -203,7 +203,47 @@ const Info = () => {
 
             <p className="text-sm text-secondary leading-relaxed text-center">
               HUWARI는 옷의 <span className="font-medium text-secondary">색감, 질감, 패턴, 스타일, 조화</span>를
-              가볍게 살펴보고, 더 편안한 코디 선택을 돕는 웹 서비스입니다.
+              가볍게 살펴보고, 더 편안한 코디 선택을 돕는 웹 서비스입니다. 핵심에는 직접 설계·학습한{' '}
+              <span className="font-medium text-secondary">FashionHarmony 모델</span>이 있습니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="col-span-12 border-b border-secondary">
+          <SectionTitle>프로젝트 요약</SectionTitle>
+          <div className="p-8 pt-5 space-y-5">
+            <p className="text-xs text-secondary leading-relaxed">
+              HUWARI는 여러 모델을 단순히 연결한 서비스가 아니라,{' '}
+              <span className="font-medium text-secondary">패션 조화도 예측 모델 FashionHarmony</span>를 직접 설계·학습하고
+              이를 웹 서비스로 옮긴 프로젝트입니다. EfficientNet-B3 백본 위에 속성 헤드(재질·패턴·스타일)와
+              Set Transformer를 결합해, <span className="font-medium text-secondary">조화 예측과 속성 예측을 하나의 모델에서 공동 학습</span>하도록 설계했습니다.
+            </p>
+            <div className="border border-secondary rounded-xl overflow-hidden">
+              <div className="grid grid-cols-3">
+                {[
+                  { model: 'MLP', auc: '0.6957' },
+                  { model: 'MH-Attn (베이스라인)', auc: '0.7524' },
+                  { model: 'FashionHarmony', auc: '0.8710', highlight: true },
+                ].map((row, i) => (
+                  <div
+                    key={row.model}
+                    className={`p-5 text-center ${i < 2 ? 'border-r border-secondary' : ''} ${row.highlight ? 'bg-secondary/5' : ''}`}
+                  >
+                    <div className={`text-xs uppercase tracking-wider mb-2 ${row.highlight ? 'font-medium text-secondary' : 'text-secondary/80'}`}>
+                      {row.model}
+                    </div>
+                    <div className={`text-lg ${row.highlight ? 'font-medium text-secondary' : 'font-light text-secondary'}`}>
+                      AUC {row.auc}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <p className="text-xs text-secondary leading-relaxed">
+              베이스라인(MH-Attn) 대비 약 <span className="font-medium text-secondary">+0.12 AUC</span> 향상.
+              Ablation 결과, Set Transformer 같은 새 구조를 더하는 것만으로는 효과가 작았고,{' '}
+              <span className="font-medium text-secondary">K-Fashion 기반 도메인 사전학습과 속성 체계 정리</span>가
+              성능 향상에 더 크게 기여했습니다.
             </p>
           </div>
         </div>
@@ -277,21 +317,21 @@ const Info = () => {
                     왼쪽 <span className="font-medium text-secondary">「분석 결과」</span>에 실시간 색상·재질·패턴·스타일이 채워집니다(「실시간 인식」 표시).
                   </li>
                   <li>오른쪽 「코디 평가」에 점수·기니 표정·말풍선 피드백이 표시됩니다. 캔버스에는 아이템을 넣지 않습니다.</li>
-                  <li>첫 분석은 모델 로딩으로 20~40초 걸릴 수 있습니다. 이전 분석이 끝나지 않았으면 그번 주기는 건너뜁니다.</li>
+                  <li>첫 분석은 모델 로딩으로 잠시 시간이 걸릴 수 있고, 이전 분석이 끝나지 않았으면 그 주기는 건너뜁니다.</li>
                 </ul>
               </div>
               <div className="p-6">
                 <h4 className="text-sm font-regular text-secondary mb-3 uppercase tracking-wider">캡처</h4>
                 <ul className="text-xs text-secondary space-y-2 leading-relaxed list-disc list-inside">
-                  <li>「캡처」를 누르면 같은 API로 크롭된 상·하의·신발을 받아 캔버스에 추가합니다.</li>
+                  <li>「캡처」를 누르면 인식된 상·하의·신발이 그대로 캔버스에 추가됩니다.</li>
                   <li>배경 제거·색·재질·패턴·스타일 분석은 업로드와 동일하게 이어집니다.</li>
-                  <li>캔버스 구성이 바뀌면 predict-harmony로 조화를 다시 계산합니다.</li>
+                  <li>캔버스 구성이 바뀌면 조화 점수가 자동으로 다시 계산됩니다.</li>
                 </ul>
               </div>
             </div>
             <p className="text-xs text-secondary leading-relaxed">
-              실시간 총점은 FashionHarmony 세트 모델(상·하의)과 FashionCLIP 색 점수를{' '}
-              <span className="font-medium text-secondary">75% / 25%</span>로 합친 0~100점입니다. 피드백 문장은 attention·속성·색·총점 구간 등 XAI 규칙으로 생성됩니다.
+              실시간 총점은 FashionHarmony 세트 점수와 FashionCLIP 색 점수를{' '}
+              <span className="font-medium text-secondary">75% / 25%</span>로 합친 0–100점입니다. 피드백 문장은 attention·속성·색·총점 구간 등 XAI 규칙으로 생성됩니다.
             </p>
           </div>
         </div>
@@ -352,7 +392,7 @@ const Info = () => {
           <div className="p-8 pt-5 space-y-6">
             <p className="text-xs text-secondary leading-relaxed">
               HUWARI는 숫자만 주지 않고, <span className="font-medium text-secondary">왜 그렇게 평가했는지</span>를
-              말풍선 피드백으로 설명합니다. 여러 신호를 합쳐 최대 약 7문장(마지막은 총점 요약)까지 보여 줍니다.
+              말풍선 피드백으로 설명합니다. 여러 신호를 합쳐 최대 6줄(마지막은 총점 요약)까지 보여 줍니다.
             </p>
             <div className="grid grid-cols-2 border border-secondary rounded-xl overflow-hidden">
               {XAI_SOURCES.map((x, i) => (
@@ -408,11 +448,11 @@ const Info = () => {
           <SectionTitle>점수 안내</SectionTitle>
           <div className="p-8 pt-5 space-y-4">
             <p className="text-xs text-secondary leading-relaxed">
-              <span className="font-medium text-secondary">총점(score_total)</span>은 FashionHarmony 세트 raw(75%)와
-              FashionCLIP 색 점수(25%)를 합친 뒤, 룰북 규칙과 50:50 병합할 수 있는 0~100 점수입니다. 코디 업로드·캔버스
-              기준은 아이템 추가·삭제·속성·색 변경 시 약 0.4초 후 점수와 말풍선 피드백이 다시 생성됩니다. 위치만
-              드래그한 경우에는 재계산하지 않습니다. 웹캠 실시간은 캔버스 없이{' '}
-              <span className="font-medium text-secondary">10초마다 webcam-harmony</span> 결과로 점수·피드백·왼쪽 분석 결과(색·속성)가 갱신됩니다.
+              <span className="font-medium text-secondary">총점</span>은 FashionHarmony 세트 점수(75%)와
+              FashionCLIP 색 점수(25%)를 합친 뒤, 사용자가 속성을 입력한 경우 룰북 규칙과 50:50으로 병합한 0–100점입니다.
+              코디 업로드·캔버스에서는 아이템을 추가·삭제하거나 속성·색을 바꾸면 잠깐 후 점수와 말풍선 피드백이 자동으로
+              다시 생성됩니다. 위치만 옮긴 경우에는 재계산하지 않습니다. 웹캠 실시간은 캔버스 없이{' '}
+              <span className="font-medium text-secondary">일정 주기로</span> 점수·피드백·왼쪽 분석 결과(색·속성)가 갱신됩니다.
             </p>
             <div className="border border-secondary rounded-xl p-5">
               <h4 className="text-xs font-medium text-secondary uppercase tracking-wider mb-2">피드백 톤</h4>
@@ -449,7 +489,7 @@ const Info = () => {
                 { name: 'React', sub: '프론트엔드 UI' },
                 { name: 'TypeScript', sub: '타입 안정성' },
                 { name: 'FastAPI', sub: '백엔드 API' },
-                { name: 'FashionHarmony', sub: '세트 조화 모델' },
+                { name: 'FashionHarmony', sub: '직접 설계한 세트 조화 모델' },
                 { name: 'FashionCLIP', sub: '색 점수·XAI 피드백' },
                 { name: 'OpenAI CLIP', sub: '의류 종류 분류' },
                 { name: '룰북', sub: '조합 규칙·설명' },
