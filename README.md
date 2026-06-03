@@ -5,7 +5,7 @@
 <h1 align="center">HUWARI</h1>
 <p align="center"><strong>패션 코디 분석 모델 FashionHarmony 설계 및 웹 서비스 구현</strong></p>
 
-EfficientNet-B3 백본 위에 **속성 헤드(재질·패턴·스타일)** 와 **Set Transformer**를 결합한 **FashionHarmony 모델**을 직접 설계·학습하고, 이를 React + FastAPI 기반 웹 서비스로 옮긴 프로젝트이다. 조화 예측과 속성 예측을 **하나의 모델에서 공동 학습**하도록 설계했고, 최종적으로 베이스라인(MH-Attn) 대비 **AUC 0.7524 → 0.8710** (+0.12)을 달성했다.
+EfficientNet-B3 백본 위에 **속성 헤드(재질·패턴·스타일)** 와 **Set Transformer**를 결합한 **FashionHarmony 모델**을 직접 설계·학습하고, 이를 React + FastAPI 기반 웹 서비스로 옮긴 프로젝트이다. 조화 예측과 속성 예측을 **하나의 모델에서 공동 학습**하도록 설계했고, 최종적으로 베이스라인(MH-Attn) 대비 **AUC 0.7524 → 0.8801** (+0.13)을 달성했다.
 
 ## 목차
 
@@ -360,7 +360,7 @@ flowchart TB
 | **VICTOR** (Papadopoulos et al., 2022) | Transformer로 아웃핏 내 여러 아이템 동시 처리, 텍스트·이미지 활용, Polyvore-Disjoint **AUC ~0.92** 보고 | **Transformer로 세트 동시 모델링하는 방향**을 확인. 다만 사용자 텍스트 의존은 실서비스 UX와 맞지 않아, **텍스트 입력 없이 이미지만으로 동작하는 방식**을 선택 |
 | **CLIP 하이브리드 멀티모달** (Kalashi & Teimourpour, 2024) | CLIP 기반 고성능 경향 | **CLIP의 패션 이해 능력**을 확인. 다만 조화 판단의 메인은 **FashionHarmony(Set Transformer)** 로 두고, **CLIP은 색 조화 보조(총점 15%)·말풍선 문구 매칭**에만 활용 |
 
-**HUWARI는** 이 흐름을 참고해서 세 가지 방향을 잡았다. (1) **Set Transformer로 세트 전체를 한 번에** 보게 하고, (2) 사용자가 별도 텍스트를 입력하지 않아도 되는 **이미지 중심 경로**로 가고(초기 Polyvore-U 실험에서는 AUC 약 **0.912**까지 나왔고, 재학습·라벨 정렬 후 서비스 기준은 AUC **0.871**), (3) 그 결과를 **FastAPI + React·웹캠**까지 붙여 실제로 쓰는 서비스로 만든다.
+**HUWARI는** 이 흐름을 참고해서 세 가지 방향을 잡았다. (1) **Set Transformer로 세트 전체를 한 번에** 보게 하고, (2) 사용자가 별도 텍스트를 입력하지 않아도 되는 **이미지 중심 경로**로 가고(초기 Polyvore-U 실험에서는 AUC 약 **0.912**까지 나왔고, 재학습·라벨 정렬 후 서비스 기준은 AUC **0.8801**), (3) 그 결과를 **FastAPI + React·웹캠**까지 붙여 실제로 쓰는 서비스로 만든다.
 
 ---
 
@@ -640,12 +640,12 @@ flowchart LR
 
 | 항목 | 개선 전 | 개선 후 |
 |------|--------|---------|
-| 조화 | MLP 0.6957 · MH-Attn 0.7524 | FashionHarmony + Set Transformer (AUC 0.871) |
+| 조화 | MLP 0.6957 · MH-Attn 0.7524 | FashionHarmony + Set Transformer + FashionCLIP 색 (AUC 0.8801) |
 | 속성 | 다세분류·노이즈 | K-Fashion·축소 클래스 방향 + 통합 모델 헤드 |
 | 웹캠 | 없음 | MediaPipe·YOLO 의류 크롭 + `webcam-harmony` 실시간(10초)·캡처 + `predict-harmony`(캔버스) |
 | 서비스 | API 단편 | FastAPI + React |
 
-![HUWARI 성능 진행 — MLP 0.6957 → MH-Attn 0.7524 → FashionHarmony 0.8710 → Final 0.8726](docs/charts/huwari_overall_progress.png)
+![HUWARI 성능 진행 — MLP 0.6957 → MH-Attn 0.7524 → FashionHarmony 0.8726 → Final(+색) 0.8801](docs/charts/huwari_overall_progress.png)
 
 아직 남은 부분은 [한계점](#limitations) 절에 표로 따로 정리해 뒀다.
 
