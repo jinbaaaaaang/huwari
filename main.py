@@ -1047,11 +1047,12 @@ def analyze_outfit(
     all_images = main_images + list(accessory_images)
     color_score = get_clip_color_score(all_images) if all_images else 0.5
 
-    # FashionCLIP 미로드·실패 시 color_score 는 0.5(중립)인데, 그대로 25% 섞으면 총점이 항상 눌림(예: 87대)
+    # FashionCLIP 미로드·실패 시 color_score 는 0.5(중립)인데, 섞으면 총점이 항상 눌림
+    # 비율 튜닝 실험(AUC 기준) 결과 85% / 15% 가 최적 (AUC 0.8801)
     if not _use_clip:
         final_raw = harmony_raw
     else:
-        final_raw = harmony_raw * 0.75 + color_score * 0.25
+        final_raw = harmony_raw * 0.85 + color_score * 0.15
     score_0to100 = round(final_raw * 100, 1)
 
     # 메인 1장 + 악세서리 없음: 세트 비교 대상이 없으므로 총점은 만점(비교·하이브리드 미적용)
