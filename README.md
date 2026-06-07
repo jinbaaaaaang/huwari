@@ -39,9 +39,7 @@ HUWARI는 "이 코디가 잘 어울리는지" 를 빠르게 확인할 수 있는
 
 옷 사진을 올리거나 [웹캠](#webcam)을 켜면, 한 코디에 대해 조화 점수(0~100)와 재질·패턴·스타일·색 분석을 같이 보여 준다. 새 옷이 옷장 속 옷과 어울릴지, 오늘 코디 후보 중 어느 쪽이 더 자연스러운지, 지금 입은 옷의 균형이 괜찮은지 같은 상황을 점수와 한국어 피드백으로 확인할 수 있다. 마음에 드는 코디는 히스토리에 저장해서, 새 옷을 올렸을 때 점수가 어떻게 달라지는지 비교해 볼 수도 있다.
 
-![HUWARI Home 화면 — 코디 업로드 캔버스와 점수·피드백 패널](docs/screenshots/01-hero-home.png)
-
-![HUWARI Home — 사진 업로드 후 조화 점수·피드백 분석](docs/screenshots/01-home-analysis.gif)
+<img src="docs/screenshots/01-home-analysis.gif" width="1024" alt="HUWARI Home — 사진 업로드 후 조화 점수·피드백 분석" />
 
 ### 사용하기 좋은 상황
 
@@ -60,7 +58,7 @@ HUWARI는 "이 코디가 잘 어울리는지" 를 빠르게 확인할 수 있는
 
 **History**는 저장한 코디를 12장(2행 × 6열) 단위로 모아 보는 페이지다. 상단에는 「내 스타일 리포트」 카드가 있어서, 그동안 저장한 코디 기준으로 자주 입는 스타일·색·평균 점수·최고 점수를 요약해 준다. 코디 카드를 누르면 Home으로 다시 불러와 지금 코디와 비교할 수 있다.
 
-![History — 코디 카드를 Home 캔버스로 불러오기](docs/screenshots/08-history-to-canvas.gif)
+<img src="docs/screenshots/08-history-to-canvas.gif" width="1024" alt="History — 코디 카드를 Home 캔버스로 불러오기" />
 
 <!-- 📸 SCREENSHOT: History 페이지(저장된 코디가 있을 때 + 비어 있을 때) -->
 저장된 코디가 쌓이면 「내 스타일 리포트」가 평균 점수·자주 입는 스타일·자주 쓰는 색을 함께 보여 주고, 그 아래에는 점수가 매겨진 코디 카드가 나열된다.
@@ -77,7 +75,7 @@ History 상단의 **「내 스타일 리포트」** 카드는 저장된 코디�
 
 **Info**는 서비스 설명과 사용 가이드를 모아 둔 페이지다. HUWARI 이름 유래·서비스를 만든 이유·주요 기능·웹캠·캔버스·사용 방법·XAI·점수 안내·기술 스택 같은 항목이 한 페이지에 정리되어 있다.
 
-![Info 페이지 — HUWARI 소개와 주요 기능 카드](docs/screenshots/09-info-page.gif)
+<img src="docs/screenshots/09-info-page.gif" width="1024" alt="Info 페이지 — HUWARI 소개와 주요 기능 카드" />
 
 ### 사용자 흐름
 
@@ -896,6 +894,8 @@ flowchart LR
 Home 상단 「웹캠」 탭에서 브라우저 카메라로 실시간 영상을 받는다. 프레임은 서버에서 MediaPipe Pose 관절(또는 YOLOv8 사람 bbox)로 상·하의·신발 영역을 잘라, 같은 조화·피드백 경로에 흘려보낸다. 캡처를 누르면 잘라낸 옷이 캔버스로 옮겨져 일반 업로드와 같은 흐름을 탄다. 상의만 보여도 분석한다.
 
 ![웹캠 모드 — 실시간 옷 영역 박스 + 점수·피드백](docs/screenshots/05-webcam-live.png)
+
+<img src="docs/screenshots/05-webcam-live.gif" width="1024" alt="웹캠 모드 — 실시간 분석 동작" />
 
 ### 웹캠이 하는 일
 
