@@ -274,6 +274,12 @@ const FEEDBACK_MIN_ROWS = 4
 
 /** 웹캠 실시간 조화 분석 주기 (ms) */
 const WEBCAM_LIVE_INTERVAL_MS = 10000
+const HISTOGRAM_WATCH_INTERVAL_MS = 500
+const HISTOGRAM_CHANGE_THRESHOLD = 0.15
+const HISTOGRAM_COOLDOWN_MS = 3000
+const HISTOGRAM_BINS = 16
+const HISTOGRAM_SAMPLE_W = 160
+const HISTOGRAM_SAMPLE_H = 90
 /** 서버 전송용 캡처 최대 너비 (추론 속도) */
 const WEBCAM_CAPTURE_MAX_WIDTH = 640
 
@@ -308,15 +314,18 @@ function Home() {
   const [webcamPreviewSize, setWebcamPreviewSize] = useState({ w: 0, h: 0 })
   const [webcamCropMethod, setWebcamCropMethod] = useState<string | null>(null)
   const [webcamLiveItems, setWebcamLiveItems] = useState<WebcamLiveItem[] | null>(null)
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const debounceTimerRef = useRef<number | null>(null)
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null)
   const webcamPreviewRef = useRef<HTMLDivElement | null>(null)
   const webcamStreamRef = useRef<MediaStream | null>(null)
-  const webcamIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const webcamIntervalRef = useRef<number | null>(null)
   const webcamAnalyzingRef = useRef(false)
   const webcamRequestSeqRef = useRef(0)
   const isCameraOnRef = useRef(false)
   const inputModeRef = useRef(inputMode)
+  const lastHistogramRef = useRef<Float32Array | null>(null)
+  const histogramWatcherRef = useRef<number | null>(null)
+  const histogramCooldownRef = useRef(false)
   inputModeRef.current = inputMode
   isCameraOnRef.current = isCameraOn
   const beforeItemsRef = useRef<PlacedItem[]>([])
@@ -778,6 +787,64 @@ function Home() {
         ? 'animate-harmony-gini-angry'
         : 'animate-harmony-gini'
 
+  const computeFrameHistogram = (video: HTMLVideoElement): Float32Array | null => {
+    if (video.readyState < 2 || video.videoWidth === 0) return null
+    const canvas = document.createElement('canvas')
+    canvas.width = HISTOGRAM_SAMPLE_W
+    canvas.height = HISTOGRAM_SAMPLE_H
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.translate(canvas.width, 0)
+    ctx.scale(-1, 1)
+    ctx.drawImage(video, 0, 0, HISTOGRAM_SAMPLE_W, HISTOGRAM_SAMPLE_H)
+    const { data } = ctx.getImageData(0, 0, HISTOGRAM_SAMPLE_W, HISTOGRAM_SAMPLE_H)
+    const hist = new Float32Array(HISTOGRAM_BINS * 3)
+    const total = HISTOGRAM_SAMPLE_W * HISTOGRAM_SAMPLE_H
+    for (let i = 0; i < data.length; i += 4) {
+      hist[Math.floor(data[i] / (256 / HISTOGRAM_BINS))]++
+      hist[HISTOGRAM_BINS + Math.floor(data[i + 1] / (256 / HISTOGRAM_BINS))]++
+      hist[HISTOGRAM_BINS * 2 + Math.floor(data[i + 2] / (256 / HISTOGRAM_BINS))]++
+    }
+    for (let i = 0; i < hist.length; i++) hist[i] /= total
+    return hist
+  }
+
+  const histogramDiff = (h1: Float32Array, h2: Float32Array): number => {
+    let diff = 0
+    for (let i = 0; i < h1.length; i++) diff += Math.abs(h1[i] - h2[i])
+    return diff / 3
+  }
+
+  const clearHistogramWatcher = () => {
+    if (histogramWatcherRef.current) {
+      clearInterval(histogramWatcherRef.current)
+      histogramWatcherRef.current = null
+    }
+    histogramCooldownRef.current = false
+    lastHistogramRef.current = null
+  }
+
+  const startHistogramWatcher = () => {
+    if (histogramWatcherRef.current) return
+    histogramWatcherRef.current = window.setInterval(() => {
+      const video = webcamVideoRef.current
+      if (!video || !isCameraOnRef.current || histogramCooldownRef.current) return
+      const hist = computeFrameHistogram(video)
+      if (!hist) return
+      if (lastHistogramRef.current) {
+        const diff = histogramDiff(lastHistogramRef.current, hist)
+        if (diff > HISTOGRAM_CHANGE_THRESHOLD) {
+          histogramCooldownRef.current = true
+          lastHistogramRef.current = hist
+          void runLiveWebcamAnalysis()
+          window.setTimeout(() => { histogramCooldownRef.current = false }, HISTOGRAM_COOLDOWN_MS)
+        }
+      } else {
+        lastHistogramRef.current = hist
+      }
+    }, HISTOGRAM_WATCH_INTERVAL_MS)
+  }
+
   const clearWebcamInterval = () => {
     if (webcamIntervalRef.current) {
       clearInterval(webcamIntervalRef.current)
@@ -787,6 +854,7 @@ function Home() {
 
   const stopWebcam = () => {
     clearWebcamInterval()
+    clearHistogramWatcher()
     webcamAnalyzingRef.current = false
     if (webcamStreamRef.current) {
       webcamStreamRef.current.getTracks().forEach(track => track.stop())
@@ -869,9 +937,10 @@ function Home() {
     if (webcamIntervalRef.current) return
     clearWebcamInterval()
     void runLiveWebcamAnalysis()
-    webcamIntervalRef.current = setInterval(() => {
+    webcamIntervalRef.current = window.setInterval(() => {
       void runLiveWebcamAnalysis()
     }, WEBCAM_LIVE_INTERVAL_MS)
+    startHistogramWatcher()
   }
 
   const onWebcamVideoReady = () => {
@@ -992,6 +1061,8 @@ function Home() {
       }
       setWebcamError('')
       applyWebcamHarmonyToScore(data)
+      const video = webcamVideoRef.current
+      if (video) lastHistogramRef.current = computeFrameHistogram(video)
       requestAnimationFrame(() => measureWebcamPreview())
     } catch (error) {
       console.error('웹캠 실시간 분석 오류:', error)
@@ -1199,6 +1270,7 @@ function Home() {
   useEffect(() => {
     if (!isCameraOn || inputMode !== 'webcam') {
       clearWebcamInterval()
+      clearHistogramWatcher()
       if (!isCameraOn) {
         setWebcamLiveScore(null)
         setWebcamLiveItems(null)
