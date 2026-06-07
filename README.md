@@ -178,11 +178,11 @@ flowchart LR
 <a id="baseline-eval"></a>
 ### 1. 베이스라인: 예전 파이프라인 구조와 측정값
 
-개선 실험에 들어가기 전에 **기존 파이프라인을 그대로 두고** 성능을 한 번 측정해 두었다. 이후 변경 작업의 **기준선(Baseline)** 으로 삼기 위해서다.
+개선 실험에 들어가기 전에, **직접 구현했던 HUWARI 초기 버전**을 그대로 두고 성능을 한 번 측정해 두었다. 이후 변경 작업의 **기준선(Baseline)** 으로 삼기 위해서다.
 
 #### 1.1 모듈 구성(개념)와 엔드포인트
 
-예전 시스템은 하나의 큰 파이프라인이라기보다, **요청 목적별로 모델이 따로 도는 API 구조**였다. 조화·속성·의류 타입·전처리가 다 분리되어 있어서, **같은 임베딩 공간을 공유하지 못했다**.
+직접 구현한 초기 시스템은 하나의 큰 파이프라인이라기보다, **요청 목적별로 모델이 따로 도는 API 구조**였다. 조화·속성·의류 타입·전처리가 다 분리되어 있어서, **같은 임베딩 공간을 공유하지 못했다**.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F4D4DC','primaryTextColor':'#5C4A52','primaryBorderColor':'#E5B8C4','lineColor':'#D4A8B6','secondaryColor':'#FFF6EC','tertiaryColor':'#FFFBF6','background':'#FFFBF7','mainBkg':'#FAE8EE','clusterBkg':'#FFF5EB','clusterBorder':'#EBC4CF','edgeLabelBackground':'#FFFBF7','fontFamily':'inherit'}}}%%
@@ -303,7 +303,7 @@ flowchart TB
 
 ### 4. 개선 실험: FashionHarmony와 데이터 재정렬
 
-앞에서 잡은 원칙을 실제 코드와 실험으로 옮긴 순서다. 학습용 데이터 파이프라인은 [데이터 전처리](#data-preprocessing) 절에 따로 정리했다.
+앞에서 잡은 원칙을 실제 코드와 실험으로 옮긴 순서다. 선행연구에서 (1) pairwise 구조의 세트 표현 한계, (2) Transformer 기반 세트 모델링의 유효성, (3) CLIP의 패션 이해력을 확인하고, 그 결과로 세트 모델링은 Set Transformer, CLIP은 색 보조로 역할을 분리하는 방향을 잡았다. 백본으로 EfficientNet-B3를 고른 이유는 [아래 설계 목표](#fashionharmony-architecture)에 따로 적어 뒀다. 학습용 데이터 파이프라인은 [데이터 전처리](#data-preprocessing) 절에 따로 정리했다.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor':'#F4D4DC','primaryTextColor':'#5C4A52','primaryBorderColor':'#E5B8C4','lineColor':'#D4A8B6','secondaryColor':'#FFF6EC','tertiaryColor':'#FFFBF6','background':'#FFFBF7','mainBkg':'#FAE8EE','clusterBkg':'#FFF5EB','clusterBorder':'#EBC4CF','edgeLabelBackground':'#FFFBF7','fontFamily':'inherit'}}}%%
